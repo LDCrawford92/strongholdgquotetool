@@ -1,5 +1,14 @@
-import { addOnPricing, matrices } from "./data";
-import type { MeasurementEntry, MeasurementUnit, PriceMatrix, QuoteInput, QuoteResult } from "./types";
+import { addOnPricing, coilCarrierPricingDefaults, matrices } from "./data";
+import type {
+  CoilCarrierInput,
+  CoilCarrierPricing,
+  CoilCarrierQuoteResult,
+  MeasurementEntry,
+  MeasurementUnit,
+  PriceMatrix,
+  QuoteInput,
+  QuoteResult,
+} from "./types";
 
 export class PricingError extends Error {
   constructor(
@@ -66,6 +75,44 @@ export function measurementInMetres(measurement: MeasurementEntry, unit: Measure
   }
 
   return metres;
+}
+
+export function quoteCoilCarrier(
+  input: CoilCarrierInput,
+  pricing: CoilCarrierPricing = coilCarrierPricingDefaults,
+): CoilCarrierQuoteResult {
+  const lengthMetres = measurementInMetres(input.length, input.measurementUnit);
+
+  if (!Number.isFinite(input.flickersPerSide) || input.flickersPerSide < 0) {
+    throw new PricingError("Flickers per side must be zero or greater.", "invalid_measurement");
+  }
+
+  const basePrice = lengthMetres * pricing.ratePerMetre;
+  const rearDoorCost = input.rearDoorRequired ? pricing.rearDoorFee : null;
+  const dripSheetCost = input.dripSheetRequired ? lengthMetres * pricing.dripSheetRatePerMetre : null;
+  const flickerQuantity = input.flickersRequired ? input.flickersPerSide * 2 : 0;
+  const flickerCost = input.flickersRequired ? flickerQuantity * pricing.flickerEach : null;
+  const rhinoFittingCost = input.fittingRequired && input.fittingAtRhino ? pricing.rhinoFittingFee : null;
+
+  return {
+    input: {
+      ...input,
+      flickersPerSide: input.flickersRequired ? input.flickersPerSide : 0,
+      fittingAtRhino: input.fittingRequired ? input.fittingAtRhino : false,
+    },
+    convertedLengthMetres: lengthMetres,
+    basePrice,
+    rearDoorCost,
+    dripSheetCost,
+    dripSheetRatePerMetre: input.dripSheetRequired ? pricing.dripSheetRatePerMetre : null,
+    flickerQuantity,
+    flickerCost,
+    rhinoFittingCost,
+    totalPrice: [basePrice, rearDoorCost, dripSheetCost, flickerCost, rhinoFittingCost].reduce<number>(
+      (sum, value) => sum + (value ?? 0),
+      0,
+    ),
+  };
 }
 
 export function parseDecimal(text: string) {

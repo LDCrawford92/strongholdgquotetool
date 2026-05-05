@@ -29,12 +29,13 @@ import {
   X,
 } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
-import { matrices } from "@/lib/pricing/data";
+import { coilCarrierPricingSettingDefaults, matrices } from "@/lib/pricing/data";
 import {
   displayValuesFromMetres,
   lenientMetres,
   parseDecimal,
   quote,
+  quoteCoilCarrier,
 } from "@/lib/pricing/engine";
 import {
   formatCurrency,
@@ -43,9 +44,12 @@ import {
 } from "@/lib/pricing/format";
 import {
   type AddOnSelection,
+  type CoilCarrierPricing,
+  type CoilCarrierQuoteResult,
   type MeasurementEntry,
   type MeasurementUnit,
   type PriceMatrix,
+  type PricingSetting,
   type QuoteResult,
   measurementUnits,
   priceListTypes,
@@ -65,6 +69,26 @@ type PriceSheetRecord = {
   updated_at: string | null;
   created_at: string | null;
 };
+
+type PricingSettingRecord = PricingSetting & {
+  id: string;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type PricingSheetOption =
+  | { value: string; label: string; kind: "matrix"; sheetName: string }
+  | { value: "coil_carrier"; label: string; kind: "coil_carrier" };
+
+const pricingSheetOptions: PricingSheetOption[] = [
+  { value: "enxl-bodybuilder", label: "ENXL Bodybuilder", kind: "matrix", sheetName: "ENXL Body Builder" },
+  { value: "enxl-haulage", label: "ENXL Haulage", kind: "matrix", sheetName: "ENXL Haulage" },
+  { value: "enxl-key-account", label: "ENXL Key Account", kind: "matrix", sheetName: "ENXL Key Account" },
+  { value: "tension-bodybuilder", label: "Tension Bodybuilder", kind: "matrix", sheetName: "Tension Body Builder" },
+  { value: "tension-haulage", label: "Tension Haulage", kind: "matrix", sheetName: "Tension Haulage" },
+  { value: "tension-key-account", label: "Tension Key Account", kind: "matrix", sheetName: "Tension Key Account" },
+  { value: "coil_carrier", label: "Coil Carrier", kind: "coil_carrier" },
+];
 
 type SavedQuoteRow = {
   id: string;
@@ -123,6 +147,9 @@ export default function Home() {
   const [priceSheets, setPriceSheets] = useState<PriceSheetRecord[]>([]);
   const [isLoadingPriceSheets, setIsLoadingPriceSheets] = useState(false);
   const [priceSheetsError, setPriceSheetsError] = useState("");
+  const [coilCarrierSettings, setCoilCarrierSettings] = useState<PricingSettingRecord[]>([]);
+  const [isLoadingCoilCarrierSettings, setIsLoadingCoilCarrierSettings] = useState(false);
+  const [coilCarrierSettingsError, setCoilCarrierSettingsError] = useState("");
 
   useEffect(() => {
     if (!isSupabaseConfigured) {
@@ -204,9 +231,37 @@ export default function Home() {
     setIsLoadingPriceSheets(false);
   }
 
+  async function loadCoilCarrierSettings() {
+    setIsLoadingCoilCarrierSettings(true);
+    setCoilCarrierSettingsError("");
+
+    const { data, error } = await supabase
+      .from("pricing_settings")
+      .select("id,category,key,label,value,unit,created_at,updated_at")
+      .eq("category", "coil_carriers")
+      .order("label", { ascending: true });
+
+    setIsLoadingCoilCarrierSettings(false);
+
+    if (error) {
+      setCoilCarrierSettings([]);
+      setCoilCarrierSettingsError(error.message);
+      return;
+    }
+
+    setCoilCarrierSettings(
+      mergeCoilCarrierSettingDefaults(
+        (data ?? []).map(normalizePricingSetting).filter((setting): setting is PricingSettingRecord => setting !== null),
+      ),
+    );
+  }
+
   useEffect(() => {
     if (!session) return;
-    void Promise.resolve().then(() => loadPriceSheets(session));
+    void Promise.resolve().then(() => {
+      void loadPriceSheets(session);
+      void loadCoilCarrierSettings();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.user.id]);
 
@@ -266,7 +321,13 @@ export default function Home() {
             session={session}
           />
         ) : null}
-        {activeSection === "coil-carriers" ? <CoilCarriersTool /> : null}
+        {activeSection === "coil-carriers" ? (
+          <CoilCarriersTool
+            pricingSettings={coilCarrierSettings}
+            pricingSettingsError={coilCarrierSettingsError}
+            isLoadingPricingSettings={isLoadingCoilCarrierSettings}
+          />
+        ) : null}
         {activeSection === "price-sheets" ? (
           <PriceSheetsTool
             priceSheets={priceSheets}
@@ -275,6 +336,11 @@ export default function Home() {
             isLoading={isLoadingPriceSheets}
             loadError={priceSheetsError}
             session={session}
+            coilCarrierSettings={coilCarrierSettings}
+            onCoilCarrierSettingsChange={setCoilCarrierSettings}
+            onReloadCoilCarrierSettings={loadCoilCarrierSettings}
+            isLoadingCoilCarrierSettings={isLoadingCoilCarrierSettings}
+            coilCarrierSettingsError={coilCarrierSettingsError}
           />
         ) : null}
         {activeSection === "history" ? <HistoryTool session={session} /> : null}
@@ -1271,21 +1337,263 @@ function MenuButton({
   );
 }
 
-function CoilCarriersTool() {
+function CoilCarriersTool({
+  pricingSettings,
+  pricingSettingsError,
+  isLoadingPricingSettings,
+}: {
+  pricingSettings: PricingSettingRecord[];
+  pricingSettingsError: string;
+  isLoadingPricingSettings: boolean;
+}) {
+  const [measurementUnit, setMeasurementUnit] = useState<MeasurementUnit>("Metres");
+  const [lengthPrimary, setLengthPrimary] = useState("");
+  const [lengthSecondary, setLengthSecondary] = useState("");
+  const [rearDoorRequired, setRearDoorRequired] = useState(false);
+  const [dripSheetRequired, setDripSheetRequired] = useState(false);
+  const [flickersRequired, setFlickersRequired] = useState(false);
+  const [flickersPerSide, setFlickersPerSide] = useState("");
+  const [fittingRequired, setFittingRequired] = useState(false);
+  const [fittingAtRhino, setFittingAtRhino] = useState(false);
+  const [result, setResult] = useState<CoilCarrierQuoteResult | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const pricing = useMemo(() => coilCarrierPricingFromSettings(pricingSettings), [pricingSettings]);
+
+  const canClear = Boolean(
+    measurementUnit !== "Metres" ||
+      lengthPrimary ||
+      lengthSecondary ||
+      rearDoorRequired ||
+      dripSheetRequired ||
+      flickersRequired ||
+      flickersPerSide ||
+      fittingRequired ||
+      fittingAtRhino ||
+      result ||
+      errorMessage,
+  );
+
+  function clearFeedback() {
+    setResult(null);
+    setErrorMessage("");
+  }
+
+  function updateUnit(nextUnit: MeasurementUnit) {
+    if (nextUnit === measurementUnit) return;
+
+    const lengthMetres = lenientMetres(lengthPrimary, lengthSecondary, measurementUnit);
+    const nextLength = lengthMetres ? displayValuesFromMetres(lengthMetres, nextUnit) : { primary: "", secondary: "" };
+
+    setMeasurementUnit(nextUnit);
+    setLengthPrimary(nextLength.primary);
+    setLengthSecondary(nextLength.secondary);
+    clearFeedback();
+  }
+
+  function getQuote() {
+    try {
+      const length = parseMeasurement(lengthPrimary, lengthSecondary, "total length", measurementUnit);
+      const parsedFlickersPerSide = flickersRequired ? parseDecimal(flickersPerSide.trim()) : 0;
+
+      if (parsedFlickersPerSide === null) {
+        throw new Error("Enter valid flickers per side.");
+      }
+
+      if (parsedFlickersPerSide < 0) {
+        throw new Error("Flickers per side must be zero or greater.");
+      }
+
+      setResult(
+        quoteCoilCarrier(
+          {
+            measurementUnit,
+            length,
+            rearDoorRequired,
+            dripSheetRequired,
+            flickersRequired,
+            flickersPerSide: parsedFlickersPerSide,
+            fittingRequired,
+            fittingAtRhino: fittingRequired ? fittingAtRhino : false,
+          },
+          pricing,
+        ),
+      );
+      setErrorMessage("");
+    } catch (error) {
+      setResult(null);
+      setErrorMessage(error instanceof Error ? error.message : "Something went wrong. Please try again.");
+    }
+  }
+
+  function clear() {
+    setMeasurementUnit("Metres");
+    setLengthPrimary("");
+    setLengthSecondary("");
+    setRearDoorRequired(false);
+    setDripSheetRequired(false);
+    setFlickersRequired(false);
+    setFlickersPerSide("");
+    setFittingRequired(false);
+    setFittingAtRhino(false);
+    setResult(null);
+    setErrorMessage("");
+  }
+
   return (
-    <section className="panel min-h-[460px]">
-      <div className="flex max-w-2xl flex-col gap-4">
-        <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent">
-          <Package />
-        </span>
-        <div>
-          <h2 className="text-2xl font-bold text-ink">Coil Carriers</h2>
-          <p className="mt-2 text-sm font-medium leading-6 text-slate-500">
-            This section is ready for the coil carrier quote flow. Add the relevant Swift pricing files or workbook data and it can use the same editable price-sheet pattern as Curtains.
-          </p>
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(340px,0.65fr)]">
+      <section className="space-y-5">
+        <section className="panel">
+          <SectionTitle title="Coil Carriers" subtitle="Calculate by total length and optional extras." />
+          {pricingSettingsError ? (
+            <div className="mt-4">
+              <StatusBanner message="Using default Coil Carrier prices. Run the pricing_settings SQL to make these fields editable in Supabase." tone="error" />
+            </div>
+          ) : null}
+          {isLoadingPricingSettings ? (
+            <p className="mt-4 text-sm font-semibold text-slate-500">Loading editable prices...</p>
+          ) : null}
+        </section>
+
+        <section className="panel">
+          <SectionTitle title="Length" subtitle="Total coil carrier length" />
+
+          <div className="mt-4 space-y-4">
+            <div>
+              <p className="mb-2 text-sm font-semibold text-slate-500">Units</p>
+              <div className="grid grid-cols-3 gap-2 rounded-[20px] border border-line bg-mist p-1.5">
+                {measurementUnits.map((unit) => (
+                  <button
+                    key={unit}
+                    type="button"
+                    onClick={() => updateUnit(unit)}
+                    className={clsx(
+                      "min-h-11 rounded-2xl px-2 text-xs font-semibold transition sm:text-sm",
+                      unit === measurementUnit
+                        ? "bg-gradient-to-br from-accent-deep to-accent text-white shadow-control"
+                        : "text-ink hover:bg-white",
+                    )}
+                  >
+                    {unit}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {measurementUnit === "Feet & Inches" ? (
+              <CompoundMeasurementField
+                title="Total Length"
+                primary={lengthPrimary}
+                secondary={lengthSecondary}
+                onPrimaryChange={(value) => {
+                  setLengthPrimary(value);
+                  clearFeedback();
+                }}
+                onSecondaryChange={(value) => {
+                  setLengthSecondary(value);
+                  clearFeedback();
+                }}
+              />
+            ) : (
+              <MeasurementField
+                title="Total Length"
+                placeholder={measurementUnit === "Metres" ? "e.g. 8.4" : "e.g. 8400"}
+                suffix={measurementUnit === "Metres" ? "m" : "mm"}
+                value={lengthPrimary}
+                onChange={(value) => {
+                  setLengthPrimary(value);
+                  clearFeedback();
+                }}
+              />
+            )}
+          </div>
+        </section>
+
+        <section className="panel">
+          <SectionTitle title="Extras" />
+          <div className="mt-4 space-y-3">
+            <OptionToggle title="Rear door required?" selected={rearDoorRequired} onToggle={() => {
+              setRearDoorRequired((value) => !value);
+              clearFeedback();
+            }} />
+            <OptionToggle title="Drip sheet required?" selected={dripSheetRequired} onToggle={() => {
+              setDripSheetRequired((value) => !value);
+              clearFeedback();
+            }} />
+            <OptionToggle title="Flickers required?" selected={flickersRequired} onToggle={() => {
+              setFlickersRequired((value) => !value);
+              clearFeedback();
+            }} />
+            {flickersRequired ? (
+              <MeasurementField
+                title="Flickers per side"
+                placeholder="0"
+                suffix="each side"
+                value={flickersPerSide}
+                onChange={(value) => {
+                  setFlickersPerSide(value);
+                  clearFeedback();
+                }}
+              />
+            ) : null}
+            <OptionToggle title="Fitting required?" selected={fittingRequired} onToggle={() => {
+              setFittingRequired((value) => {
+                if (value) setFittingAtRhino(false);
+                return !value;
+              });
+              clearFeedback();
+            }} />
+            {fittingRequired ? (
+              <div className="space-y-2">
+                <OptionToggle title="Fitting at Rhino" selected={fittingAtRhino} onToggle={() => {
+                  setFittingAtRhino((value) => !value);
+                  clearFeedback();
+                }} />
+                {fittingAtRhino ? (
+                  <p className="rounded-[20px] border border-blue-200 bg-accent-soft p-4 text-sm font-semibold text-accent">
+                    Confirm with customer at Rhino
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        {errorMessage ? <StatusBanner message={errorMessage} tone="error" /> : null}
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button className="primary-button" type="button" onClick={getQuote}>
+            Get Quote
+          </button>
+          <button className="secondary-button flex items-center justify-center gap-2" type="button" onClick={clear} disabled={!canClear}>
+            <RotateCcw size={17} />
+            Clear
+          </button>
         </div>
-      </div>
-    </section>
+      </section>
+
+      <aside className="lg:sticky lg:top-8 lg:h-fit">
+        {result ? (
+          <CoilCarrierResultCard quoteResult={result} onDiscard={() => setResult(null)} />
+        ) : (
+          <div className="panel flex min-h-[420px] flex-col justify-between overflow-hidden">
+            <div>
+              <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent">
+                <Package />
+              </span>
+              <h2 className="mt-5 text-2xl font-bold text-ink">Quote Result</h2>
+              <p className="mt-2 text-sm font-medium leading-6 text-slate-500">
+                Enter a length, choose any extras, then generate the coil carrier total.
+              </p>
+            </div>
+            <div className="rounded-[24px] border border-line bg-mist p-5">
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Current rate</p>
+              <p className="mt-2 text-sm font-semibold text-ink">{formatCurrency(pricing.ratePerMetre)} per metre</p>
+            </div>
+          </div>
+        )}
+      </aside>
+    </div>
   );
 }
 
@@ -1296,6 +1604,11 @@ function PriceSheetsTool({
   isLoading,
   loadError,
   session,
+  coilCarrierSettings,
+  onCoilCarrierSettingsChange,
+  onReloadCoilCarrierSettings,
+  isLoadingCoilCarrierSettings,
+  coilCarrierSettingsError,
 }: {
   priceSheets: PriceSheetRecord[];
   onPriceSheetsChange: Dispatch<SetStateAction<PriceSheetRecord[]>>;
@@ -1303,18 +1616,51 @@ function PriceSheetsTool({
   isLoading: boolean;
   loadError: string;
   session: Session;
+  coilCarrierSettings: PricingSettingRecord[];
+  onCoilCarrierSettingsChange: Dispatch<SetStateAction<PricingSettingRecord[]>>;
+  onReloadCoilCarrierSettings: () => Promise<void>;
+  isLoadingCoilCarrierSettings: boolean;
+  coilCarrierSettingsError: string;
 }) {
-  const [selectedSheetId, setSelectedSheetId] = useState("");
+  const [selectedSheetOptionValue, setSelectedSheetOptionValue] = useState("");
+  const [loadedSheetOptionValue, setLoadedSheetOptionValue] = useState("");
   const [draftState, setDraftState] = useState<{ sheetId: string; matrix: PriceMatrix } | null>(null);
+  const [coilCarrierDraftSettings, setCoilCarrierDraftSettings] = useState<PricingSettingRecord[] | null>(null);
   const [isEditingUnlocked, setIsEditingUnlocked] = useState(false);
   const [editPassword, setEditPassword] = useState("");
   const [status, setStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingCoilCarrierSettings, setIsSavingCoilCarrierSettings] = useState(false);
 
-  const effectiveSelectedSheetId = selectedSheetId || priceSheets[0]?.id || "";
-  const selectedSheet = priceSheets.find((sheet) => sheet.id === effectiveSelectedSheetId) ?? null;
-  const draftMatrix = draftState?.sheetId === effectiveSelectedSheetId ? draftState.matrix : null;
+  const selectedSheetOption = pricingSheetOptions.find((option) => option.value === selectedSheetOptionValue) ?? null;
+  const loadedSheetOption = pricingSheetOptions.find((option) => option.value === loadedSheetOptionValue) ?? null;
+  const selectedSheet = loadedSheetOption?.kind === "matrix"
+    ? priceSheets.find((sheet) => sheet.sheet_name === loadedSheetOption.sheetName) ?? null
+    : null;
+  const draftMatrix = selectedSheet && draftState?.sheetId === selectedSheet.id ? draftState.matrix : null;
   const matrix = draftMatrix ?? selectedSheet?.sheet_data ?? null;
+  const effectiveCoilCarrierSettings = coilCarrierDraftSettings ?? mergeCoilCarrierSettingDefaults(coilCarrierSettings);
+  const isCoilCarrierLoaded = loadedSheetOption?.kind === "coil_carrier";
+  const isMatrixLoaded = loadedSheetOption?.kind === "matrix";
+
+  function loadSelectedPricingSheet() {
+    if (!selectedSheetOption) {
+      setLoadedSheetOptionValue("");
+      setDraftState(null);
+      setCoilCarrierDraftSettings(null);
+      setIsEditingUnlocked(false);
+      setEditPassword("");
+      setStatus({ tone: "error", message: "Please select a pricing sheet to load." });
+      return;
+    }
+
+    setLoadedSheetOptionValue(selectedSheetOption.value);
+    setDraftState(null);
+    setCoilCarrierDraftSettings(null);
+    setIsEditingUnlocked(false);
+    setEditPassword("");
+    setStatus(null);
+  }
 
   function unlockEditing() {
     if (editPassword !== "stronghold1") {
@@ -1335,10 +1681,20 @@ function PriceSheetsTool({
 
   function updateMatrix(updater: (matrix: PriceMatrix) => PriceMatrix) {
     if (!isEditingUnlocked) return;
-    if (!selectedSheet || !matrix) return;
+    if (!isMatrixLoaded || !selectedSheet || !matrix) return;
     setDraftState({
       sheetId: selectedSheet.id,
       matrix: updater(cloneMatrix(matrix)),
+    });
+  }
+
+  function updateCoilCarrierSetting(key: string, value: string) {
+    if (!isEditingUnlocked) return;
+
+    const parsed = parseDecimal(value);
+    setCoilCarrierDraftSettings((current) => {
+      const source = current ?? effectiveCoilCarrierSettings;
+      return source.map((setting) => (setting.key === key ? { ...setting, value: parsed ?? 0 } : setting));
     });
   }
 
@@ -1410,6 +1766,43 @@ function PriceSheetsTool({
     setStatus({ tone: "success", message: "Price sheet saved." });
   }
 
+  async function saveCoilCarrierSettings() {
+    if (!isCoilCarrierLoaded || !effectiveCoilCarrierSettings.length) return;
+
+    setIsSavingCoilCarrierSettings(true);
+    setStatus(null);
+
+    const payload = effectiveCoilCarrierSettings.map((setting) => ({
+      category: setting.category,
+      key: setting.key,
+      label: setting.label,
+      value: setting.value,
+      unit: setting.unit,
+      updated_at: new Date().toISOString(),
+    }));
+
+    const { data, error } = await supabase
+      .from("pricing_settings")
+      .upsert(payload, { onConflict: "category,key" })
+      .select("id,category,key,label,value,unit,created_at,updated_at")
+      .eq("category", "coil_carriers")
+      .order("label", { ascending: true });
+
+    setIsSavingCoilCarrierSettings(false);
+
+    if (error) {
+      setStatus({ tone: "error", message: error.message });
+      return;
+    }
+
+    const savedSettings = mergeCoilCarrierSettingDefaults(
+      (data ?? []).map(normalizePricingSetting).filter((setting): setting is PricingSettingRecord => setting !== null),
+    );
+    onCoilCarrierSettingsChange(savedSettings);
+    setCoilCarrierDraftSettings(null);
+    setStatus({ tone: "success", message: "Coil Carrier pricing saved." });
+  }
+
   return (
     <section className="space-y-5">
       <div className="panel">
@@ -1428,37 +1821,44 @@ function PriceSheetsTool({
             <label className="field flex items-center gap-3">
               <FileSpreadsheet className="shrink-0 text-accent" size={19} />
               <select
-                value={effectiveSelectedSheetId}
+                value={selectedSheetOptionValue}
                 onChange={(event) => {
-                  setSelectedSheetId(event.target.value);
+                  setSelectedSheetOptionValue(event.target.value);
+                  setLoadedSheetOptionValue("");
                   setDraftState(null);
+                  setCoilCarrierDraftSettings(null);
+                  setIsEditingUnlocked(false);
+                  setEditPassword("");
                   setStatus(null);
                 }}
                 className="h-14 flex-1 appearance-none bg-transparent text-sm font-semibold text-ink outline-none"
                 aria-label="Select price sheet"
-                disabled={isLoading || Boolean(loadError)}
+                disabled={isLoading && !priceSheets.length}
               >
-                {priceSheets.map((priceSheet) => (
-                  <option key={priceSheet.id} value={priceSheet.id}>
-                    {priceSheet.sheet_name}
+                <option value="">Select pricing sheet</option>
+                {pricingSheetOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
                   </option>
                 ))}
               </select>
               <ChevronDown className="text-slate-400" size={18} />
             </label>
 
-            <button type="button" onClick={onReload} className="secondary-button flex items-center justify-center gap-2">
-              <RotateCcw size={17} />
-              Reload
+            <button type="button" onClick={loadSelectedPricingSheet} className="primary-button flex items-center justify-center gap-2">
+              <ChevronDown size={17} />
+              Load
             </button>
           </div>
         </div>
       </div>
 
       {loadError ? <StatusBanner message={`Pricing sheets could not be loaded: ${loadError}`} tone="error" /> : null}
+      {coilCarrierSettingsError ? <StatusBanner message={`Coil Carrier pricing could not be loaded: ${coilCarrierSettingsError}`} tone="error" /> : null}
       {status ? <StatusBanner message={status.message} tone={status.tone} /> : null}
 
-      <div className="panel">
+      {loadedSheetOption ? (
+        <div className="panel">
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
             <SectionTitle title="Edit Lock" subtitle="Enter the internal password to edit pricing values." />
@@ -1487,13 +1887,71 @@ function PriceSheetsTool({
           )}
         </div>
       </div>
+      ) : null}
 
-      <div className="panel overflow-hidden p-0">
-        <div className="border-b border-line px-5 py-4 md:px-6">
-          <h2 className="text-lg font-semibold text-ink">{selectedSheet?.sheet_name ?? "Pricing Sheet"}</h2>
-          <p className="mt-1 text-sm font-medium text-slate-500">
-            {matrix ? `${matrix.drops.length} drops x ${matrix.poleCentres.length} pole centres` : "No sheet selected"}
-          </p>
+      {isCoilCarrierLoaded ? (
+        <div className="panel">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <SectionTitle title="Coil Carrier Pricing" subtitle="Editable rates used by the Coil Carriers quote page." />
+            <p className="mt-3 max-w-3xl text-sm font-medium leading-6 text-slate-500">
+              These values save to public.pricing_settings under the coil_carriers category.
+            </p>
+          </div>
+
+          <button type="button" onClick={onReloadCoilCarrierSettings} className="secondary-button flex items-center justify-center gap-2" disabled={isLoadingCoilCarrierSettings}>
+            <RotateCcw size={17} />
+            Reload
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {effectiveCoilCarrierSettings.map((setting) => (
+            <label key={setting.key} className="block rounded-[20px] border border-line bg-mist p-4">
+              <span className="text-sm font-semibold text-ink">{setting.label}</span>
+              <span className="mt-1 block text-xs font-semibold text-slate-400">{coilCarrierDisplayKey(setting.key)}</span>
+              <span className="field mt-3 flex items-center gap-3 bg-white">
+                <input
+                  value={setting.value}
+                  onChange={(event) => updateCoilCarrierSetting(setting.key, event.target.value)}
+                  className="h-14 flex-1 bg-transparent outline-none placeholder:text-slate-300"
+                  inputMode="decimal"
+                  disabled={!isEditingUnlocked}
+                  aria-label={setting.label}
+                />
+                <span className="rounded-full bg-mist px-3 py-1.5 text-xs font-semibold text-slate-500">{setting.unit ?? "GBP"}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+
+        <div className="mt-5 flex justify-end">
+          <button
+            type="button"
+            onClick={saveCoilCarrierSettings}
+            className="primary-button flex items-center justify-center gap-2"
+            disabled={!isEditingUnlocked || isSavingCoilCarrierSettings}
+          >
+            <Save size={17} />
+            {isSavingCoilCarrierSettings ? "Saving..." : "Save Coil Carrier Pricing"}
+          </button>
+        </div>
+      </div>
+      ) : null}
+
+      {isMatrixLoaded ? (
+        <div className="panel overflow-hidden p-0">
+        <div className="flex flex-col gap-3 border-b border-line px-5 py-4 md:flex-row md:items-center md:justify-between md:px-6">
+          <div>
+            <h2 className="text-lg font-semibold text-ink">{loadedSheetOption?.label ?? selectedSheet?.sheet_name ?? "Pricing Sheet"}</h2>
+            <p className="mt-1 text-sm font-medium text-slate-500">
+              {matrix ? `${matrix.drops.length} drops x ${matrix.poleCentres.length} pole centres` : "No sheet selected"}
+            </p>
+          </div>
+          <button type="button" onClick={onReload} className="secondary-button flex items-center justify-center gap-2">
+            <RotateCcw size={17} />
+            Reload
+          </button>
         </div>
 
         {matrix ? <div className="max-h-[68vh] overflow-auto">
@@ -1548,13 +2006,16 @@ function PriceSheetsTool({
           </table>
         </div> : null}
       </div>
+      ) : null}
 
-      <div className="flex justify-end">
+      {isMatrixLoaded ? (
+        <div className="flex justify-end">
         <button type="button" onClick={savePriceSheet} className="primary-button flex items-center justify-center gap-2" disabled={!isEditingUnlocked || !matrix || isSaving}>
           <Save size={17} />
           {isSaving ? "Saving..." : "Save Price Sheet"}
         </button>
       </div>
+      ) : null}
     </section>
   );
 }
@@ -1580,6 +2041,57 @@ function normalizePriceSheet(value: unknown): PriceSheetRecord | null {
     updated_at: typeof value.updated_at === "string" ? value.updated_at : null,
     created_at: typeof value.created_at === "string" ? value.created_at : null,
   };
+}
+
+function normalizePricingSetting(value: unknown): PricingSettingRecord | null {
+  if (!isRecord(value)) return null;
+
+  const numericValue = Number(value.value);
+  if (!Number.isFinite(numericValue)) return null;
+
+  return {
+    id: String(value.id ?? `${value.category ?? ""}-${value.key ?? ""}`),
+    category: String(value.category ?? ""),
+    key: String(value.key ?? ""),
+    label: String(value.label ?? ""),
+    value: numericValue,
+    unit: typeof value.unit === "string" ? value.unit : null,
+    created_at: typeof value.created_at === "string" ? value.created_at : null,
+    updated_at: typeof value.updated_at === "string" ? value.updated_at : null,
+  };
+}
+
+function mergeCoilCarrierSettingDefaults(settings: PricingSettingRecord[]) {
+  return coilCarrierPricingSettingDefaults.map((defaultSetting) => {
+    const savedSetting = settings.find((setting) => setting.key === defaultSetting.key);
+    return savedSetting ? {
+      ...savedSetting,
+      label: defaultSetting.label,
+      unit: defaultSetting.unit,
+    } : {
+      ...defaultSetting,
+      id: `default-coil-carriers-${defaultSetting.key}`,
+      created_at: null,
+      updated_at: null,
+    };
+  });
+}
+
+function coilCarrierPricingFromSettings(settings: PricingSettingRecord[]): CoilCarrierPricing {
+  const mergedSettings = mergeCoilCarrierSettingDefaults(settings);
+  const settingValue = (key: string) => mergedSettings.find((setting) => setting.key === key)?.value ?? 0;
+
+  return {
+    ratePerMetre: settingValue("rate_per_metre"),
+    rearDoorFee: settingValue("rear_door_fee"),
+    dripSheetRatePerMetre: settingValue("drip_sheet_fee"),
+    flickerEach: settingValue("flicker_each"),
+    rhinoFittingFee: settingValue("rhino_fitting_fee"),
+  };
+}
+
+function coilCarrierDisplayKey(key: string) {
+  return `coil_carrier_${key}`;
 }
 
 function isPriceMatrix(value: unknown): value is PriceMatrix {
@@ -1784,6 +2296,122 @@ function AddOnRow({
         </button>
       </div>
       {expanded ? <p className="pl-[52px] pt-3 text-sm font-medium text-slate-500">{addOn.description}</p> : null}
+    </div>
+  );
+}
+
+function OptionToggle({
+  title,
+  selected,
+  onToggle,
+}: {
+  title: string;
+  selected: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div
+      className={clsx(
+        "rounded-[20px] border p-3 transition",
+        selected ? "border-blue-200 bg-accent-soft" : "border-line bg-white",
+      )}
+    >
+      <div className="flex items-center gap-3">
+        <span
+          className={clsx(
+            "grid h-10 w-10 shrink-0 place-items-center rounded-2xl",
+            selected ? "bg-gradient-to-br from-accent-deep to-accent text-white" : "bg-mist text-accent",
+          )}
+        >
+          <Package size={17} />
+        </span>
+        <p className="min-w-0 flex-1 text-sm font-semibold text-ink">{title}</p>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-pressed={selected}
+          className={clsx(
+            "relative h-8 w-14 rounded-full border transition",
+            selected ? "border-accent bg-accent" : "border-line bg-slate-100",
+          )}
+        >
+          <span
+            className={clsx(
+              "absolute top-1 h-6 w-6 rounded-full bg-white shadow transition",
+              selected ? "left-7" : "left-1",
+            )}
+          />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CoilCarrierResultCard({
+  quoteResult,
+  onDiscard,
+}: {
+  quoteResult: CoilCarrierQuoteResult;
+  onDiscard: () => void;
+}) {
+  return (
+    <section className="panel">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-xl font-semibold text-ink">Quote Result</h2>
+        <button type="button" onClick={onDiscard} className="grid h-9 w-9 place-items-center rounded-full bg-mist text-ink" aria-label="Discard quote">
+          <X size={16} />
+        </button>
+      </div>
+
+      <div className="mt-4 rounded-[24px] border border-blue-200 bg-gradient-to-br from-accent-soft to-white p-5">
+        <p className="text-sm font-semibold text-accent">Coil Carriers</p>
+        <p className="mt-4 text-sm font-semibold text-slate-500">Final Total</p>
+        <p className="mt-1 text-4xl font-bold text-ink">{formatCurrency(quoteResult.totalPrice)}</p>
+
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          <MetricPill title="Length" value={formatMetres(quoteResult.convertedLengthMetres)} />
+          <MetricPill title="Flickers" value={String(quoteResult.flickerQuantity)} />
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-[20px] border border-line bg-white p-4">
+        <p className="text-sm font-semibold text-ink">Quote Breakdown</p>
+        <CoilCarrierBreakdown quoteResult={quoteResult} />
+      </div>
+
+      <div className="mt-4">
+        <button className="secondary-button w-full" type="button" onClick={onDiscard}>
+          Disregard Quote
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function CoilCarrierBreakdown({ quoteResult }: { quoteResult: CoilCarrierQuoteResult }) {
+  return (
+    <div className="mt-4 space-y-4">
+      <BreakdownGroup title="Measurements">
+        <DetailRow label="Units" value={quoteResult.input.measurementUnit} />
+        <DetailRow label="Entered length" value={formatMeasurement(quoteResult.input.length, quoteResult.input.measurementUnit)} />
+        <DetailRow label="Length in metres" value={formatMetres(quoteResult.convertedLengthMetres)} />
+      </BreakdownGroup>
+
+      <BreakdownGroup title="Quote Breakdown">
+        <DetailRow label="Base coil carrier price" value={formatCurrency(quoteResult.basePrice)} />
+        {quoteResult.rearDoorCost !== null ? <DetailRow label="Rear door" value={formatCurrency(quoteResult.rearDoorCost)} /> : null}
+        {quoteResult.dripSheetCost !== null && quoteResult.dripSheetRatePerMetre !== null ? (
+          <DetailRow
+            label="Drip sheet"
+            value={`${formatMetres(quoteResult.convertedLengthMetres)} x ${formatCurrency(quoteResult.dripSheetRatePerMetre)}/m = ${formatCurrency(quoteResult.dripSheetCost)}`}
+          />
+        ) : null}
+        {quoteResult.flickerCost !== null ? (
+          <DetailRow label={`Flickers (${quoteResult.flickerQuantity})`} value={formatCurrency(quoteResult.flickerCost)} />
+        ) : null}
+        {quoteResult.rhinoFittingCost !== null ? <DetailRow label="Fitting at Rhino" value={formatCurrency(quoteResult.rhinoFittingCost)} /> : null}
+        <DetailRow label="Final total" value={formatCurrency(quoteResult.totalPrice)} emphasize />
+      </BreakdownGroup>
     </div>
   );
 }

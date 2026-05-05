@@ -58,3 +58,43 @@ export type QuoteResult = {
   deliveryCost: number | null;
   totalPrice: number;
 };
+
+export type PricingSetting = {
+  category: string;
+  key: string;
+  label: string;
+  value: number;
+  unit: string | null;
+};
+
+export type CoilCarrierPricing = {
+  ratePerMetre: number;
+  rearDoorFee: number;
+  dripSheetRatePerMetre: number;
+  flickerEach: number;
+  rhinoFittingFee: number;
+};
+
+export type CoilCarrierInput = {
+  measurementUnit: MeasurementUnit;
+  length: MeasurementEntry;
+  rearDoorRequired: boolean;
+  dripSheetRequired: boolean;
+  flickersRequired: boolean;
+  flickersPerSide: number;
+  fittingRequired: boolean;
+  fittingAtRhino: boolean;
+};
+
+export type CoilCarrierQuoteResult = {
+  input: CoilCarrierInput;
+  convertedLengthMetres: number;
+  basePrice: number;
+  rearDoorCost: number | null;
+  dripSheetCost: number | null;
+  dripSheetRatePerMetre: number | null;
+  flickerQuantity: number;
+  flickerCost: number | null;
+  rhinoFittingCost: number | null;
+  totalPrice: number;
+};

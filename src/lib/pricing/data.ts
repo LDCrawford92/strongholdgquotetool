@@ -1,4 +1,4 @@
-import type { AddOnPricing, PriceListType, PriceMatrix } from "./types";
+import type { AddOnPricing, CoilCarrierPricing, PriceListType, PriceMatrix, PricingSetting } from "./types";
 
 export const addOnPricing: AddOnPricing = {
   printRatePerSquareMetre: 14,
@@ -6,6 +6,52 @@ export const addOnPricing: AddOnPricing = {
   fitting: 250,
   delivery: 45,
 };
+
+export const coilCarrierPricingDefaults: CoilCarrierPricing = {
+  ratePerMetre: 148,
+  rearDoorFee: 180,
+  dripSheetRatePerMetre: 0,
+  flickerEach: 18,
+  rhinoFittingFee: 450,
+};
+
+export const coilCarrierPricingSettingDefaults: PricingSetting[] = [
+  {
+    category: "coil_carriers",
+    key: "rate_per_metre",
+    label: "Rate per metre",
+    value: coilCarrierPricingDefaults.ratePerMetre,
+    unit: "GBP_PER_METRE",
+  },
+  {
+    category: "coil_carriers",
+    key: "rear_door_fee",
+    label: "Rear door fee",
+    value: coilCarrierPricingDefaults.rearDoorFee,
+    unit: "GBP",
+  },
+  {
+    category: "coil_carriers",
+    key: "drip_sheet_fee",
+    label: "Drip sheet rate per metre",
+    value: coilCarrierPricingDefaults.dripSheetRatePerMetre,
+    unit: "GBP_PER_METRE",
+  },
+  {
+    category: "coil_carriers",
+    key: "flicker_each",
+    label: "Flicker each",
+    value: coilCarrierPricingDefaults.flickerEach,
+    unit: "GBP",
+  },
+  {
+    category: "coil_carriers",
+    key: "rhino_fitting_fee",
+    label: "Rhino fitting fee",
+    value: coilCarrierPricingDefaults.rhinoFittingFee,
+    unit: "GBP",
+  },
+];
 
 const standardDrops = [2.75, 2.9, 3.0, 3.2, 3.35];
 
