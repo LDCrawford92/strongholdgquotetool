@@ -18,9 +18,10 @@ Create `.env.local` with:
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=your-project-url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 ```
 
-The frontend uses only the anon/public key. Do not add a service role key to this app.
+The frontend uses only the anon/public key. `SUPABASE_SERVICE_ROLE_KEY` is used by server-side admin API routes only and must never be exposed with a `NEXT_PUBLIC_` prefix.
 
 ## Pricing Logic
 
@@ -34,5 +35,6 @@ The pricing engine lives in `src/lib/pricing`.
 - The main menu includes Curtains, Coil Carriers, Pricing Sheets, History, and Settings.
 - Pricing Sheets loads from `public.price_sheets`, seeds defaults from the hardcoded catalogue if empty, and saves edits back to Supabase after unlocking with the internal edit password.
 - Coil Carrier pricing uses `public.pricing_settings`. Run `supabase/pricing_settings.sql` once to add or update the editable rate fields.
+- Pricing Sheets is admin-only. Admin status is read from `public.profiles.role = 'admin'`; `supabase/admin_roles_rls.sql` adds the role column and restricts pricing writes to admins.
 - Generated quotes can be saved to `public.saved_quotes` for the logged-in Supabase user.
 - The History tab hides expired quotes and removes expired rows for the current user on load.

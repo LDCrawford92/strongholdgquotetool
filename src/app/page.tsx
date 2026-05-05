@@ -76,6 +76,16 @@ type PricingSettingRecord = PricingSetting & {
   updated_at: string | null;
 };
 
+type UserRole = "admin" | "user";
+
+type AdminUserSearchResult = {
+  id: string;
+  email: string;
+  username: string | null;
+  fullName: string | null;
+  role: UserRole;
+};
+
 type PricingSheetOption =
   | { value: string; label: string; kind: "matrix"; sheetName: string }
   | { value: "coil_carrier"; label: string; kind: "coil_carrier" };
@@ -150,6 +160,9 @@ export default function Home() {
   const [coilCarrierSettings, setCoilCarrierSettings] = useState<PricingSettingRecord[]>([]);
   const [isLoadingCoilCarrierSettings, setIsLoadingCoilCarrierSettings] = useState(false);
   const [coilCarrierSettingsError, setCoilCarrierSettingsError] = useState("");
+  const [currentUserRole, setCurrentUserRole] = useState<UserRole>("user");
+
+  const isAdmin = Boolean(session && currentUserRole === "admin");
 
   useEffect(() => {
     if (!isSupabaseConfigured) {
@@ -166,6 +179,7 @@ export default function Home() {
 
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
+      setCurrentUserRole("user");
       if (!nextSession) setActiveSection("curtains");
       setIsCheckingSession(false);
     });
@@ -179,10 +193,28 @@ export default function Home() {
   async function logout() {
     await supabase.auth.signOut();
     setSession(null);
+    setCurrentUserRole("user");
     setActiveSection("curtains");
   }
 
-  async function loadPriceSheets(currentSession: Session) {
+  async function loadCurrentUserRole(currentSession: Session): Promise<UserRole> {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", currentSession.user.id)
+      .maybeSingle();
+
+    if (error) {
+      setCurrentUserRole("user");
+      return "user";
+    }
+
+    const nextRole = data?.role === "admin" ? "admin" : "user";
+    setCurrentUserRole(nextRole);
+    return nextRole;
+  }
+
+  async function loadPriceSheets(currentSession: Session, canSeedDefaults = false) {
     setIsLoadingPriceSheets(true);
     setPriceSheetsError("");
 
@@ -199,6 +231,12 @@ export default function Home() {
     }
 
     if (!data?.length) {
+      if (!canSeedDefaults) {
+        setPriceSheets(defaultPriceSheetRecords());
+        setIsLoadingPriceSheets(false);
+        return;
+      }
+
       const now = new Date().toISOString();
       const defaults = priceListTypes.map((sheetName) => ({
         sheet_key: slugify(String(sheetName)),
@@ -258,8 +296,9 @@ export default function Home() {
 
   useEffect(() => {
     if (!session) return;
-    void Promise.resolve().then(() => {
-      void loadPriceSheets(session);
+    void Promise.resolve().then(async () => {
+      const role = await loadCurrentUserRole(session);
+      void loadPriceSheets(session, role === "admin");
       void loadCoilCarrierSettings();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -304,10 +343,18 @@ export default function Home() {
             </div>
           </div>
 
-          <nav className="grid rounded-[22px] border border-line bg-mist p-1.5 shadow-inner sm:grid-cols-2 lg:grid-cols-5" aria-label="Main menu">
+          <nav
+            className={clsx(
+              "grid rounded-[22px] border border-line bg-mist p-1.5 shadow-inner sm:grid-cols-2",
+              isAdmin ? "lg:grid-cols-5" : "lg:grid-cols-4",
+            )}
+            aria-label="Main menu"
+          >
             <MenuButton section="curtains" activeSection={activeSection} onClick={setActiveSection} icon={ScrollText} label="Curtains" />
             <MenuButton section="coil-carriers" activeSection={activeSection} onClick={setActiveSection} icon={Package} label="Coil Carriers" />
-            <MenuButton section="price-sheets" activeSection={activeSection} onClick={setActiveSection} icon={FileSpreadsheet} label="Pricing Sheets" />
+            {isAdmin ? (
+              <MenuButton section="price-sheets" activeSection={activeSection} onClick={setActiveSection} icon={FileSpreadsheet} label="Pricing Sheets" />
+            ) : null}
             <MenuButton section="history" activeSection={activeSection} onClick={setActiveSection} icon={History} label="History" />
             <MenuButton section="settings" activeSection={activeSection} onClick={setActiveSection} icon={Settings} label="Settings" />
           </nav>
@@ -332,7 +379,7 @@ export default function Home() {
           <PriceSheetsTool
             priceSheets={priceSheets}
             onPriceSheetsChange={setPriceSheets}
-            onReload={() => loadPriceSheets(session)}
+            onReload={() => loadPriceSheets(session, true)}
             isLoading={isLoadingPriceSheets}
             loadError={priceSheetsError}
             session={session}
@@ -341,6 +388,7 @@ export default function Home() {
             onReloadCoilCarrierSettings={loadCoilCarrierSettings}
             isLoadingCoilCarrierSettings={isLoadingCoilCarrierSettings}
             coilCarrierSettingsError={coilCarrierSettingsError}
+            isAdmin={isAdmin}
           />
         ) : null}
         {activeSection === "history" ? <HistoryTool session={session} /> : null}
@@ -1597,6 +1645,24 @@ function CoilCarriersTool({
   );
 }
 
+function AdminAccessRequired() {
+  return (
+    <section className="panel">
+      <div className="flex max-w-2xl flex-col gap-4">
+        <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent">
+          <Settings />
+        </span>
+        <div>
+          <h2 className="text-2xl font-bold text-ink">Admin access required</h2>
+          <p className="mt-2 text-sm font-medium leading-6 text-slate-500">
+            Pricing sheets are only available to admin users. Normal users can still access the quote tools.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function PriceSheetsTool({
   priceSheets,
   onPriceSheetsChange,
@@ -1609,6 +1675,7 @@ function PriceSheetsTool({
   onReloadCoilCarrierSettings,
   isLoadingCoilCarrierSettings,
   coilCarrierSettingsError,
+  isAdmin,
 }: {
   priceSheets: PriceSheetRecord[];
   onPriceSheetsChange: Dispatch<SetStateAction<PriceSheetRecord[]>>;
@@ -1621,6 +1688,7 @@ function PriceSheetsTool({
   onReloadCoilCarrierSettings: () => Promise<void>;
   isLoadingCoilCarrierSettings: boolean;
   coilCarrierSettingsError: string;
+  isAdmin: boolean;
 }) {
   const [selectedSheetOptionValue, setSelectedSheetOptionValue] = useState("");
   const [loadedSheetOptionValue, setLoadedSheetOptionValue] = useState("");
@@ -1631,6 +1699,13 @@ function PriceSheetsTool({
   const [status, setStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isSavingCoilCarrierSettings, setIsSavingCoilCarrierSettings] = useState(false);
+  const [userSearchQuery, setUserSearchQuery] = useState("");
+  const [userSearchResults, setUserSearchResults] = useState<AdminUserSearchResult[]>([]);
+  const [selectedResetUser, setSelectedResetUser] = useState<AdminUserSearchResult | null>(null);
+  const [temporaryPassword, setTemporaryPassword] = useState("");
+  const [isSearchingUsers, setIsSearchingUsers] = useState(false);
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
+  const [passwordResetStatus, setPasswordResetStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
 
   const selectedSheetOption = pricingSheetOptions.find((option) => option.value === selectedSheetOptionValue) ?? null;
   const loadedSheetOption = pricingSheetOptions.find((option) => option.value === loadedSheetOptionValue) ?? null;
@@ -1731,6 +1806,11 @@ function PriceSheetsTool({
   }
 
   async function savePriceSheet() {
+    if (!isAdmin) {
+      setStatus({ tone: "error", message: "Admin access required." });
+      return;
+    }
+
     if (!selectedSheet || !matrix) return;
 
     setIsSaving(true);
@@ -1767,6 +1847,11 @@ function PriceSheetsTool({
   }
 
   async function saveCoilCarrierSettings() {
+    if (!isAdmin) {
+      setStatus({ tone: "error", message: "Admin access required." });
+      return;
+    }
+
     if (!isCoilCarrierLoaded || !effectiveCoilCarrierSettings.length) return;
 
     setIsSavingCoilCarrierSettings(true);
@@ -1801,6 +1886,90 @@ function PriceSheetsTool({
     onCoilCarrierSettingsChange(savedSettings);
     setCoilCarrierDraftSettings(null);
     setStatus({ tone: "success", message: "Coil Carrier pricing saved." });
+  }
+
+  async function searchUsersForPasswordReset() {
+    const query = userSearchQuery.trim();
+    setPasswordResetStatus(null);
+    setSelectedResetUser(null);
+    setUserSearchResults([]);
+
+    if (query.length < 2) {
+      setPasswordResetStatus({ tone: "error", message: "Enter at least 2 characters to search." });
+      return;
+    }
+
+    setIsSearchingUsers(true);
+
+    const response = await fetch(`/api/admin/password-reset?q=${encodeURIComponent(query)}`, {
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    });
+    const payload = await response.json().catch(() => null) as { users?: AdminUserSearchResult[]; error?: string } | null;
+
+    setIsSearchingUsers(false);
+
+    if (!response.ok) {
+      setPasswordResetStatus({ tone: "error", message: payload?.error ?? "Unable to search users." });
+      return;
+    }
+
+    const users = payload?.users ?? [];
+    setUserSearchResults(users);
+    setPasswordResetStatus(users.length ? null : { tone: "error", message: "No matching users found." });
+  }
+
+  async function resetUserPassword() {
+    if (!selectedResetUser) {
+      setPasswordResetStatus({ tone: "error", message: "Select a user before resetting their password." });
+      return;
+    }
+
+    if (!temporaryPassword) {
+      setPasswordResetStatus({ tone: "error", message: "Enter a temporary password." });
+      return;
+    }
+
+    if (temporaryPassword.length < 8) {
+      setPasswordResetStatus({ tone: "error", message: "Temporary password must be at least 8 characters." });
+      return;
+    }
+
+    const confirmed = window.confirm(`Reset the password for ${selectedResetUser.username ?? selectedResetUser.email}?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setIsResettingPassword(true);
+    setPasswordResetStatus(null);
+
+    const response = await fetch("/api/admin/password-reset", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ userId: selectedResetUser.id, password: temporaryPassword }),
+    });
+    const payload = await response.json().catch(() => null) as { message?: string; error?: string } | null;
+
+    setIsResettingPassword(false);
+
+    if (!response.ok) {
+      setPasswordResetStatus({ tone: "error", message: payload?.error ?? "Unable to update password." });
+      return;
+    }
+
+    setTemporaryPassword("");
+    setPasswordResetStatus({
+      tone: "success",
+      message: payload?.message ?? "Password updated. Ask the user to log in with their temporary password and change it when available.",
+    });
+  }
+
+  if (!isAdmin) {
+    return <AdminAccessRequired />;
   }
 
   return (
@@ -1856,6 +2025,121 @@ function PriceSheetsTool({
       {loadError ? <StatusBanner message={`Pricing sheets could not be loaded: ${loadError}`} tone="error" /> : null}
       {coilCarrierSettingsError ? <StatusBanner message={`Coil Carrier pricing could not be loaded: ${coilCarrierSettingsError}`} tone="error" /> : null}
       {status ? <StatusBanner message={status.message} tone={status.tone} /> : null}
+
+      <div className="panel">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <SectionTitle title="Reset User Password" subtitle="Set a temporary password for a selected user." />
+            <p className="mt-3 max-w-3xl text-sm font-medium leading-6 text-slate-500">
+              Search by username. Existing passwords are never shown.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(260px,1fr)_auto]">
+          <label className="field flex items-center gap-3">
+            <User className="shrink-0 text-accent" size={18} />
+            <input
+              value={userSearchQuery}
+              onChange={(event) => {
+                setUserSearchQuery(event.target.value);
+                setSelectedResetUser(null);
+                setTemporaryPassword("");
+                setPasswordResetStatus(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void searchUsersForPasswordReset();
+                }
+              }}
+              className="h-14 flex-1 bg-transparent outline-none placeholder:text-slate-300"
+              placeholder="Username"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={searchUsersForPasswordReset}
+            className="secondary-button flex items-center justify-center gap-2"
+            disabled={isSearchingUsers}
+          >
+            <Eye size={17} />
+            {isSearchingUsers ? "Searching..." : "Search"}
+          </button>
+        </div>
+
+        {userSearchResults.length ? (
+          <div className="mt-4 grid gap-3">
+            {userSearchResults.map((user) => {
+              const selected = selectedResetUser?.id === user.id;
+              return (
+                <button
+                  key={user.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedResetUser(user);
+                    setTemporaryPassword("");
+                    setPasswordResetStatus(null);
+                  }}
+                  className={clsx(
+                    "rounded-[20px] border p-4 text-left transition",
+                    selected ? "border-blue-200 bg-accent-soft" : "border-line bg-mist hover:bg-white",
+                  )}
+                >
+                  <span className="block text-sm font-semibold text-ink">{user.username ?? "No username"}</span>
+                  <span className="mt-1 block text-sm font-medium text-slate-500">{user.email}</span>
+                  <span className="mt-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+                    {user.fullName ? `${user.fullName} • ${user.role}` : user.role}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+
+        {selectedResetUser ? (
+          <div className="mt-4 rounded-[20px] border border-line bg-mist p-4">
+            <p className="text-sm font-semibold text-ink">Selected user</p>
+            <p className="mt-1 text-sm font-medium text-slate-500">
+              {(selectedResetUser.username ?? "No username")} • {selectedResetUser.email}
+            </p>
+          </div>
+        ) : null}
+
+        {selectedResetUser ? (
+          <label className="mt-4 block">
+            <span className="mb-2 block text-sm font-semibold text-slate-500">Temporary password</span>
+            <span className="field flex items-center gap-3">
+              <Settings className="shrink-0 text-accent" size={18} />
+              <input
+                value={temporaryPassword}
+                onChange={(event) => {
+                  setTemporaryPassword(event.target.value);
+                  setPasswordResetStatus(null);
+                }}
+                type="password"
+                autoComplete="new-password"
+                className="h-14 flex-1 bg-transparent outline-none placeholder:text-slate-300"
+                placeholder="Minimum 8 characters"
+              />
+            </span>
+          </label>
+        ) : null}
+
+        {passwordResetStatus ? <div className="mt-4"><StatusBanner message={passwordResetStatus.message} tone={passwordResetStatus.tone} /></div> : null}
+
+        <div className="mt-5 flex justify-end">
+          <button
+            type="button"
+            onClick={resetUserPassword}
+            className="primary-button flex items-center justify-center gap-2"
+            disabled={!selectedResetUser || !temporaryPassword || isResettingPassword}
+          >
+            <Save size={17} />
+            {isResettingPassword ? "Updating..." : "Reset user password"}
+          </button>
+        </div>
+      </div>
 
       {loadedSheetOption ? (
         <div className="panel">
@@ -2026,6 +2310,19 @@ function cloneMatrix(matrix: PriceMatrix): PriceMatrix {
     drops: [...matrix.drops],
     prices: matrix.prices.map((row) => [...row]),
   };
+}
+
+function defaultPriceSheetRecords(): PriceSheetRecord[] {
+  return priceListTypes.map((sheetName) => ({
+    id: `default-${slugify(String(sheetName))}`,
+    sheet_key: slugify(String(sheetName)),
+    sheet_name: String(sheetName),
+    sheet_data: cloneMatrix(matrices[sheetName]),
+    is_active: true,
+    updated_by: null,
+    updated_at: null,
+    created_at: null,
+  }));
 }
 
 function normalizePriceSheet(value: unknown): PriceSheetRecord | null {
