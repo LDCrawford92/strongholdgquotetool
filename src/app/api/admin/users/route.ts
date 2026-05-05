@@ -5,10 +5,10 @@ export const runtime = "nodejs";
 
 type AdminUserSearchResult = {
   id: string;
-  email: string;
   username: string | null;
   fullName: string | null;
   role: "admin" | "user";
+  createdAt: string | null;
 };
 
 function getAdminSupabase() {
@@ -93,7 +93,7 @@ function strongholdEmail(username: string) {
 async function searchUsers(supabaseAdmin: NonNullable<ReturnType<typeof getAdminSupabase>>, query: string) {
   const { data: profileRows, error: profilesError } = await supabaseAdmin
     .from("profiles")
-    .select("id,username,full_name,role");
+    .select("id,username,full_name,role,created_at");
 
   if (profilesError) {
     return { users: null, error: profilesError };
@@ -123,16 +123,16 @@ async function searchUsers(supabaseAdmin: NonNullable<ReturnType<typeof getAdmin
 
     users.push({
       id,
-      email,
       username: username || null,
       fullName: fullName || null,
       role: profile.role === "admin" ? "admin" : "user",
+      createdAt: typeof profile.created_at === "string" ? profile.created_at : null,
     });
   }
 
   return {
     users: users
-      .sort((left, right) => (left.username ?? left.email).localeCompare(right.username ?? right.email))
+      .sort((left, right) => (left.username ?? left.fullName ?? "").localeCompare(right.username ?? right.fullName ?? ""))
       .slice(0, 20),
     error: null,
   };
@@ -144,11 +144,11 @@ export async function GET(request: NextRequest) {
   if (!supabaseAdmin) return NextResponse.json({ error: "User management service is not configured." }, { status: 500 });
 
   const query = request.nextUrl.searchParams.get("q") ?? "";
-  if (normalizeSearchQuery(query).length < 2) {
+  if (query && normalizeSearchQuery(query).length < 2) {
     return NextResponse.json({ error: "Enter at least 2 characters to search." }, { status: 400 });
   }
 
-  const result = await searchUsers(supabaseAdmin, query);
+  const result = await searchUsers(supabaseAdmin, query || " ");
   if (result.error) {
     return NextResponse.json({ error: result.error.message }, { status: 500 });
   }
@@ -186,7 +186,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: existing.error.message }, { status: 500 });
   }
 
-  if ((existing.users ?? []).some((user) => user.username?.toLowerCase() === username || user.email.toLowerCase() === email)) {
+  if ((existing.users ?? []).some((user) => user.username?.toLowerCase() === username)) {
     return NextResponse.json({ error: "A user with that username already exists." }, { status: 409 });
   }
 
@@ -234,10 +234,10 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     user: {
       id: createdUser.user.id,
-      email,
       username,
       fullName,
       role: "user",
+      createdAt: new Date().toISOString(),
     },
     message: `User ${username} created. Ask them to log in with their temporary password.`,
   });
@@ -248,11 +248,84 @@ export async function PATCH(request: NextRequest) {
   if (error) return error;
   if (!supabaseAdmin) return NextResponse.json({ error: "User management service is not configured." }, { status: 500 });
 
-  const body = await request.json().catch(() => null) as { userId?: unknown; password?: unknown } | null;
+  const body = await request.json().catch(() => null) as {
+    action?: unknown;
+    userId?: unknown;
+    password?: unknown;
+    username?: unknown;
+    fullName?: unknown;
+  } | null;
+  const action = typeof body?.action === "string" ? body.action : "reset-password";
   const userId = typeof body?.userId === "string" ? body.userId.trim() : "";
+
+  if (!userId) return NextResponse.json({ error: "Select a user first." }, { status: 400 });
+
+  if (action === "edit") {
+    const username = normalizeUsername(typeof body?.username === "string" ? body.username : "");
+    const fullName = typeof body?.fullName === "string" ? body.fullName.trim() : "";
+
+    if (!username) return NextResponse.json({ error: "Enter a username." }, { status: 400 });
+    if (!isValidUsername(username)) {
+      return NextResponse.json({ error: "Username can only use letters, numbers, dots, dashes, and underscores." }, { status: 400 });
+    }
+    if (!fullName) return NextResponse.json({ error: "Enter a full name." }, { status: 400 });
+
+    const { data: currentProfile, error: currentProfileError } = await supabaseAdmin
+      .from("profiles")
+      .select("id,role,created_at")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (currentProfileError || !currentProfile) {
+      return NextResponse.json({ error: "Selected user was not found." }, { status: 404 });
+    }
+
+    const email = strongholdEmail(username);
+    const { data: authUsers, error: authUsersError } = await supabaseAdmin.auth.admin.listUsers({
+      page: 1,
+      perPage: 1000,
+    });
+
+    if (authUsersError) return NextResponse.json({ error: authUsersError.message }, { status: 500 });
+
+    if (authUsers.users.some((user) => user.id !== userId && user.email?.toLowerCase() === email)) {
+      return NextResponse.json({ error: "A user with that username already exists." }, { status: 409 });
+    }
+
+    const { data: duplicateProfile, error: duplicateProfileError } = await supabaseAdmin
+      .from("profiles")
+      .select("id")
+      .eq("username", username)
+      .neq("id", userId)
+      .maybeSingle();
+
+    if (duplicateProfileError) return NextResponse.json({ error: duplicateProfileError.message }, { status: 500 });
+    if (duplicateProfile) return NextResponse.json({ error: "A user with that username already exists." }, { status: 409 });
+
+    const { error: authUpdateError } = await supabaseAdmin.auth.admin.updateUserById(userId, { email });
+    if (authUpdateError) return NextResponse.json({ error: authUpdateError.message }, { status: 500 });
+
+    const { error: profileUpdateError } = await supabaseAdmin
+      .from("profiles")
+      .update({ username, full_name: fullName })
+      .eq("id", userId);
+
+    if (profileUpdateError) return NextResponse.json({ error: profileUpdateError.message }, { status: 500 });
+
+    return NextResponse.json({
+      user: {
+        id: userId,
+        username,
+        fullName,
+        role: currentProfile.role === "admin" ? "admin" : "user",
+        createdAt: typeof currentProfile.created_at === "string" ? currentProfile.created_at : null,
+      },
+      message: "User updated.",
+    });
+  }
+
   const password = typeof body?.password === "string" ? body.password : "";
 
-  if (!userId) return NextResponse.json({ error: "Select a user before resetting their password." }, { status: 400 });
   if (!password) return NextResponse.json({ error: "Enter a temporary password." }, { status: 400 });
   if (password.length < 8) {
     return NextResponse.json({ error: "Temporary password must be at least 8 characters." }, { status: 400 });

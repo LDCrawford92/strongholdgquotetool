@@ -80,13 +80,13 @@ type UserRole = "admin" | "user";
 
 type AdminUserSearchResult = {
   id: string;
-  email: string;
   username: string | null;
   fullName: string | null;
   role: UserRole;
+  createdAt: string | null;
 };
 
-type UserManagementMode = "reset" | "add" | "delete";
+type UserManagementMode = "reset" | "add" | "delete" | "edit";
 
 type PricingSheetOption =
   | { value: string; label: string; kind: "matrix"; sheetName: string }
@@ -1246,7 +1246,7 @@ function SavedQuoteDetailsModal({
 }
 
 function SettingsTool({ session }: { session: Session }) {
-  const fallbackUsername = session.user.email?.replace("@stronghold.local", "") ?? "";
+  const fallbackUsername = displayUsername(session.user.email);
   const [username, setUsername] = useState(fallbackUsername);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -1360,7 +1360,7 @@ function SettingsTool({ session }: { session: Session }) {
           </label>
 
           <div className="rounded-[20px] border border-line bg-mist p-4 text-sm font-medium text-slate-500">
-            Login email is managed internally as `{username || "username"}@stronghold.local` and cannot be changed here.
+            Your login username is managed by Stronghold.
           </div>
 
           {usernameStatus ? <StatusBanner message={usernameStatus.message} tone={usernameStatus.tone} /> : null}
@@ -1389,7 +1389,7 @@ function SettingsTool({ session }: { session: Session }) {
         <SectionTitle title="Session" subtitle="Prepared for future saved quote ownership." />
         <div className="mt-4 grid gap-3 md:grid-cols-2">
           <DetailTile label="Supabase user id" value={session.user.id} />
-          <DetailTile label="Login identity" value={session.user.email ?? "Not available"} />
+          <DetailTile label="Login identity" value={displayUsername(session.user.email)} />
         </div>
       </div>
     </section>
@@ -1759,17 +1759,27 @@ function AdminAccessRequired() {
 
 function UserManagementTool({ session, isAdmin }: { session: Session; isAdmin: boolean }) {
   const [mode, setMode] = useState<UserManagementMode>("reset");
+  const [users, setUsers] = useState<AdminUserSearchResult[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<AdminUserSearchResult[]>([]);
   const [selectedUser, setSelectedUser] = useState<AdminUserSearchResult | null>(null);
+  const [editUsername, setEditUsername] = useState("");
+  const [editFullName, setEditFullName] = useState("");
   const [temporaryPassword, setTemporaryPassword] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [newUsername, setNewUsername] = useState("");
   const [newFullName, setNewFullName] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [isSearching, setIsSearching] = useState(false);
+  const [isLoadingUsers, setIsLoadingUsers] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [status, setStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    void loadUsers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
 
   if (!isAdmin) {
     return <AdminAccessRequired />;
@@ -1778,6 +1788,34 @@ function UserManagementTool({ session, isAdmin }: { session: Session; isAdmin: b
   function clearUserSelection() {
     setSearchResults([]);
     setSelectedUser(null);
+    setEditUsername("");
+    setEditFullName("");
+    setTemporaryPassword("");
+    setDeleteConfirmation("");
+    setStatus(null);
+  }
+
+  async function loadUsers() {
+    setIsLoadingUsers(true);
+    const response = await fetch("/api/admin/users", {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    const payload = await response.json().catch(() => null) as { users?: AdminUserSearchResult[]; error?: string } | null;
+    setIsLoadingUsers(false);
+
+    if (!response.ok) {
+      setStatus({ tone: "error", message: payload?.error ?? "Unable to load users." });
+      return;
+    }
+
+    setUsers(payload?.users ?? []);
+  }
+
+  function chooseUser(user: AdminUserSearchResult, nextMode?: UserManagementMode) {
+    if (nextMode) setMode(nextMode);
+    setSelectedUser(user);
+    setEditUsername(user.username ?? "");
+    setEditFullName(user.fullName ?? "");
     setTemporaryPassword("");
     setDeleteConfirmation("");
     setStatus(null);
@@ -1830,7 +1868,7 @@ function UserManagementTool({ session, isAdmin }: { session: Session; isAdmin: b
       return;
     }
 
-    const confirmed = window.confirm(`Reset the password for ${selectedUser.username ?? selectedUser.email}?`);
+    const confirmed = window.confirm(`Reset the password for ${displayManagedUserName(selectedUser)}?`);
     if (!confirmed) return;
 
     setIsSubmitting(true);
@@ -1853,6 +1891,54 @@ function UserManagementTool({ session, isAdmin }: { session: Session; isAdmin: b
 
     setTemporaryPassword("");
     setStatus({ tone: "success", message: payload?.message ?? "Password updated. Ask the user to log in with their temporary password." });
+  }
+
+  async function editUser() {
+    if (!selectedUser) {
+      setStatus({ tone: "error", message: "Select a user before editing." });
+      return;
+    }
+
+    const username = editUsername.trim();
+    const fullName = editFullName.trim();
+
+    if (!username) {
+      setStatus({ tone: "error", message: "Enter a username." });
+      return;
+    }
+
+    if (!fullName) {
+      setStatus({ tone: "error", message: "Enter a full name." });
+      return;
+    }
+
+    setIsSubmitting(true);
+    setStatus(null);
+
+    const response = await fetch("/api/admin/users", {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ action: "edit", userId: selectedUser.id, username, fullName }),
+    });
+    const payload = await response.json().catch(() => null) as { message?: string; error?: string; user?: AdminUserSearchResult } | null;
+    setIsSubmitting(false);
+
+    if (!response.ok) {
+      setStatus({ tone: "error", message: payload?.error ?? "Unable to update user." });
+      return;
+    }
+
+    if (payload?.user) {
+      setSelectedUser(payload.user);
+      setUsers((current) => current.map((user) => (user.id === payload.user?.id ? payload.user : user)));
+      setSearchResults((current) => current.map((user) => (user.id === payload.user?.id ? payload.user : user)));
+    }
+
+    setStatus({ tone: "success", message: payload?.message ?? "User updated." });
+    await loadUsers();
   }
 
   async function addUser() {
@@ -1901,6 +1987,7 @@ function UserManagementTool({ session, isAdmin }: { session: Session; isAdmin: b
     setNewFullName("");
     setNewPassword("");
     setStatus({ tone: "success", message: payload?.message ?? "User created." });
+    await loadUsers();
   }
 
   async function deleteUser() {
@@ -1919,7 +2006,7 @@ function UserManagementTool({ session, isAdmin }: { session: Session; isAdmin: b
       return;
     }
 
-    const confirmed = window.confirm(`Permanently delete ${selectedUser.username ?? selectedUser.email}?`);
+    const confirmed = window.confirm(`Permanently delete ${displayManagedUserName(selectedUser)}?`);
     if (!confirmed) return;
 
     setIsSubmitting(true);
@@ -1944,6 +2031,7 @@ function UserManagementTool({ session, isAdmin }: { session: Session; isAdmin: b
     setDeleteConfirmation("");
     setSearchResults((current) => current.filter((user) => user.id !== selectedUser.id));
     setStatus({ tone: "success", message: payload?.message ?? "User deleted." });
+    await loadUsers();
   }
 
   return (
@@ -1959,6 +2047,62 @@ function UserManagementTool({ session, isAdmin }: { session: Session; isAdmin: b
 
       {status ? <StatusBanner message={status.message} tone={status.tone} /> : null}
 
+      <div className="panel overflow-hidden p-0">
+        <div className="flex flex-col gap-3 border-b border-line px-5 py-4 md:flex-row md:items-center md:justify-between md:px-6">
+          <div>
+            <h2 className="text-lg font-semibold text-ink">List All Users</h2>
+            <p className="mt-1 text-sm font-medium text-slate-500">Admin view of Stronghold user accounts.</p>
+          </div>
+          <button type="button" onClick={loadUsers} className="secondary-button flex items-center justify-center gap-2" disabled={isLoadingUsers}>
+            <RotateCcw size={17} />
+            {isLoadingUsers ? "Loading..." : "Refresh"}
+          </button>
+        </div>
+        <div className="overflow-auto">
+          <table className="min-w-full border-separate border-spacing-0 text-sm">
+            <thead>
+              <tr>
+                <th className="border-b border-line bg-mist px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Username</th>
+                <th className="border-b border-line bg-mist px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Full name</th>
+                <th className="border-b border-line bg-mist px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Role</th>
+                <th className="border-b border-line bg-mist px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Created date</th>
+                <th className="border-b border-line bg-mist px-4 py-3 text-right text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((user) => (
+                <tr key={user.id}>
+                  <td className="border-b border-line px-4 py-3 font-semibold text-ink">{user.username ?? "Unknown"}</td>
+                  <td className="border-b border-line px-4 py-3 text-slate-500">{user.fullName ?? "Not set"}</td>
+                  <td className="border-b border-line px-4 py-3 text-slate-500">{user.role}</td>
+                  <td className="border-b border-line px-4 py-3 text-slate-500">{formatDate(user.createdAt ?? "")}</td>
+                  <td className="border-b border-line px-4 py-3">
+                    <div className="flex justify-end gap-2">
+                      <button type="button" onClick={() => chooseUser(user, "edit")} className="grid h-9 w-9 place-items-center rounded-full bg-mist text-ink" aria-label={`Edit ${displayManagedUserName(user)}`}>
+                        <Settings size={16} />
+                      </button>
+                      <button type="button" onClick={() => chooseUser(user, "reset")} className="grid h-9 w-9 place-items-center rounded-full bg-mist text-ink" aria-label={`Reset password for ${displayManagedUserName(user)}`}>
+                        <Save size={16} />
+                      </button>
+                      <button type="button" onClick={() => chooseUser(user, "delete")} className="grid h-9 w-9 place-items-center rounded-full bg-mist text-ink" aria-label={`Delete ${displayManagedUserName(user)}`}>
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {!users.length ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-6 text-center text-sm font-semibold text-slate-500">
+                    {isLoadingUsers ? "Loading users..." : "No users found."}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {mode === "add" ? (
         <div className="panel">
           <SectionTitle title="Add User" subtitle="Create a standard user account with a temporary password." />
@@ -1966,7 +2110,7 @@ function UserManagementTool({ session, isAdmin }: { session: Session; isAdmin: b
             <TextField label="Username" value={newUsername} onChange={setNewUsername} placeholder="david" />
             <TextField label="Full name" value={newFullName} onChange={setNewFullName} placeholder="David Smith" />
             <PasswordInput label="Temporary password" value={newPassword} onChange={setNewPassword} />
-            <DetailTile label="Auth email" value={`${newUsername.trim().toLowerCase().replace(/\s+/g, "") || "username"}@stronghold.local`} />
+            <DetailTile label="Login username" value={newUsername.trim().toLowerCase().replace(/\s+/g, "") || "username"} />
           </div>
           <div className="mt-5 flex justify-end">
             <button type="button" onClick={addUser} className="primary-button flex items-center justify-center gap-2" disabled={isSubmitting}>
@@ -1978,8 +2122,8 @@ function UserManagementTool({ session, isAdmin }: { session: Session; isAdmin: b
       ) : (
         <div className="panel">
           <SectionTitle
-            title={mode === "reset" ? "Reset Password" : "Delete User"}
-            subtitle="Search by username, full name, or linked auth email."
+            title={mode === "reset" ? "Reset Password" : mode === "edit" ? "Edit User" : "Delete User"}
+            subtitle="Search by username or full name."
           />
           <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(260px,1fr)_auto]">
             <label className="field flex items-center gap-3">
@@ -1997,7 +2141,7 @@ function UserManagementTool({ session, isAdmin }: { session: Session; isAdmin: b
                   }
                 }}
                 className="h-14 flex-1 bg-transparent outline-none placeholder:text-slate-300"
-                placeholder="Username, full name, or auth email"
+                placeholder="Username or full name"
               />
             </label>
             <button type="button" onClick={searchUsers} className="secondary-button flex items-center justify-center gap-2" disabled={isSearching}>
@@ -2017,8 +2161,24 @@ function UserManagementTool({ session, isAdmin }: { session: Session; isAdmin: b
             <div className="mt-4 rounded-[20px] border border-line bg-mist p-4">
               <p className="text-sm font-semibold text-ink">Selected user</p>
               <p className="mt-1 text-sm font-medium text-slate-500">
-                {(selectedUser.username ?? "No username")} • {selectedUser.email}
+                {displayManagedUserName(selectedUser)}
               </p>
+            </div>
+          ) : null}
+
+          {mode === "edit" && selectedUser ? (
+            <div className="mt-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <TextField label="Username" value={editUsername} onChange={setEditUsername} placeholder="david" />
+                <TextField label="Full name" value={editFullName} onChange={setEditFullName} placeholder="David Smith" />
+                <DetailTile label="Role" value={selectedUser.role} />
+              </div>
+              <div className="mt-5 flex justify-end">
+                <button type="button" onClick={editUser} className="primary-button flex items-center justify-center gap-2" disabled={isSubmitting}>
+                  <Save size={17} />
+                  {isSubmitting ? "Saving..." : "Save User"}
+                </button>
+              </div>
             </div>
           ) : null}
 
@@ -2107,8 +2267,7 @@ function UserSearchResults({
               selected ? "border-blue-200 bg-accent-soft" : "border-line bg-mist hover:bg-white",
             )}
           >
-            <span className="block text-sm font-semibold text-ink">{user.username ?? "No username"}</span>
-            <span className="mt-1 block text-sm font-medium text-slate-500">{user.email}</span>
+            <span className="block text-sm font-semibold text-ink">{displayManagedUserName(user)}</span>
             <span className="mt-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
               {user.fullName ? `${user.fullName} • ${user.role}` : user.role}
             </span>
@@ -2117,6 +2276,10 @@ function UserSearchResults({
       })}
     </div>
   );
+}
+
+function displayManagedUserName(user: AdminUserSearchResult) {
+  return user.username || user.fullName || "Unknown user";
 }
 
 function TextField({
