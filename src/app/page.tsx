@@ -10,7 +10,7 @@ import {
   Eye,
   FileSpreadsheet,
   Grid2X2,
-  History,
+  Home as HomeIcon,
   Info,
   LogOut,
   Menu,
@@ -57,7 +57,7 @@ import {
 import { isSupabaseConfigured, supabase, usernameToEmail } from "@/lib/supabase/client";
 
 type AddOnKey = keyof AddOnSelection;
-type AppSection = "curtains" | "coil-carriers" | "price-sheets" | "history" | "settings";
+type AppSection = "dashboard" | "curtains" | "coil-carriers" | "price-sheets" | "user-management" | "history" | "settings";
 
 type PriceSheetRecord = {
   id: string;
@@ -85,6 +85,8 @@ type AdminUserSearchResult = {
   fullName: string | null;
   role: UserRole;
 };
+
+type UserManagementMode = "reset" | "add" | "delete";
 
 type PricingSheetOption =
   | { value: string; label: string; kind: "matrix"; sheetName: string }
@@ -153,7 +155,7 @@ const addOns: Array<{
 export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
   const [isCheckingSession, setIsCheckingSession] = useState(isSupabaseConfigured);
-  const [activeSection, setActiveSection] = useState<AppSection>("curtains");
+  const [activeSection, setActiveSection] = useState<AppSection>("dashboard");
   const [priceSheets, setPriceSheets] = useState<PriceSheetRecord[]>([]);
   const [isLoadingPriceSheets, setIsLoadingPriceSheets] = useState(false);
   const [priceSheetsError, setPriceSheetsError] = useState("");
@@ -180,7 +182,7 @@ export default function Home() {
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
       setCurrentUserRole("user");
-      if (!nextSession) setActiveSection("curtains");
+      if (!nextSession) setActiveSection("dashboard");
       setIsCheckingSession(false);
     });
 
@@ -194,7 +196,7 @@ export default function Home() {
     await supabase.auth.signOut();
     setSession(null);
     setCurrentUserRole("user");
-    setActiveSection("curtains");
+    setActiveSection("dashboard");
   }
 
   async function loadCurrentUserRole(currentSession: Session): Promise<UserRole> {
@@ -346,20 +348,23 @@ export default function Home() {
           <nav
             className={clsx(
               "grid rounded-[22px] border border-line bg-mist p-1.5 shadow-inner sm:grid-cols-2",
-              isAdmin ? "lg:grid-cols-5" : "lg:grid-cols-4",
+              isAdmin ? "lg:grid-cols-5" : "lg:grid-cols-3",
             )}
             aria-label="Main menu"
           >
+            <MenuButton section="dashboard" activeSection={activeSection} onClick={setActiveSection} icon={HomeIcon} label="Dashboard" />
             <MenuButton section="curtains" activeSection={activeSection} onClick={setActiveSection} icon={ScrollText} label="Curtains" />
             <MenuButton section="coil-carriers" activeSection={activeSection} onClick={setActiveSection} icon={Package} label="Coil Carriers" />
             {isAdmin ? (
-              <MenuButton section="price-sheets" activeSection={activeSection} onClick={setActiveSection} icon={FileSpreadsheet} label="Pricing Sheets" />
+              <>
+                <MenuButton section="price-sheets" activeSection={activeSection} onClick={setActiveSection} icon={FileSpreadsheet} label="Pricing Sheets" />
+                <MenuButton section="user-management" activeSection={activeSection} onClick={setActiveSection} icon={User} label="User Management" />
+              </>
             ) : null}
-            <MenuButton section="history" activeSection={activeSection} onClick={setActiveSection} icon={History} label="History" />
-            <MenuButton section="settings" activeSection={activeSection} onClick={setActiveSection} icon={Settings} label="Settings" />
           </nav>
         </header>
 
+        {activeSection === "dashboard" ? <DashboardTool isAdmin={isAdmin} onNavigate={setActiveSection} /> : null}
         {activeSection === "curtains" ? (
           <CurtainsTool
             priceSheets={priceSheets}
@@ -391,6 +396,7 @@ export default function Home() {
             isAdmin={isAdmin}
           />
         ) : null}
+        {activeSection === "user-management" ? <UserManagementTool session={session} isAdmin={isAdmin} /> : null}
         {activeSection === "history" ? <HistoryTool session={session} /> : null}
         {activeSection === "settings" ? <SettingsTool session={session} /> : null}
       </div>
@@ -822,7 +828,7 @@ function LoginScreen({ onLogin }: { onLogin: (session: Session) => void }) {
                 }}
                 autoCapitalize="none"
                 autoComplete="username"
-                placeholder="lewis"
+                placeholder="Enter Username"
                 className="h-14 flex-1 bg-transparent outline-none placeholder:text-slate-300"
               />
             </span>
@@ -857,6 +863,94 @@ function LoginScreen({ onLogin }: { onLogin: (session: Session) => void }) {
         </div>
       </form>
     </main>
+  );
+}
+
+function DashboardTool({
+  isAdmin,
+  onNavigate,
+}: {
+  isAdmin: boolean;
+  onNavigate: (section: AppSection) => void;
+}) {
+  return (
+    <section className="space-y-5">
+      <div className="panel">
+        <SectionTitle title="Dashboard" subtitle="Choose a quoting tool to get started." />
+        <div className="mt-5 grid gap-4 md:grid-cols-3">
+          <DashboardCard
+            title="Start ENXL Quote"
+            description="Open the curtains quote tool and choose an ENXL pricing sheet."
+            icon={ScrollText}
+            onClick={() => onNavigate("curtains")}
+          />
+          <DashboardCard
+            title="Start Tension Quote"
+            description="Open the curtains quote tool and choose a Tension pricing sheet."
+            icon={Ruler}
+            onClick={() => onNavigate("curtains")}
+          />
+          <DashboardCard
+            title="Start Coil Carrier Quote"
+            description="Calculate a coil carrier from length and selected extras."
+            icon={Package}
+            onClick={() => onNavigate("coil-carriers")}
+          />
+        </div>
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.65fr)]">
+        <div className="panel">
+          <SectionTitle title="Help" subtitle="Quick notes for using the quote tool." />
+          <div className="mt-4 grid gap-3">
+            <DetailTile label="Curtain quotes" value="Select a pricing sheet, enter pole centre and drop, then add any extras." />
+            <DetailTile label="Coil carrier quotes" value="Length can be entered in metres, millimetres, or feet and inches." />
+          </div>
+        </div>
+
+        {isAdmin ? (
+          <div className="panel">
+            <SectionTitle title="Admin" subtitle="Manage pricing and users." />
+            <div className="mt-4 grid gap-3">
+              <button type="button" onClick={() => onNavigate("price-sheets")} className="secondary-button flex items-center justify-center gap-2">
+                <FileSpreadsheet size={17} />
+                Price Sheets
+              </button>
+              <button type="button" onClick={() => onNavigate("user-management")} className="secondary-button flex items-center justify-center gap-2">
+                <User size={17} />
+                User Management
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function DashboardCard({
+  title,
+  description,
+  icon: Icon,
+  onClick,
+}: {
+  title: string;
+  description: string;
+  icon: typeof Menu;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-[20px] border border-line bg-mist p-5 text-left transition hover:bg-white"
+    >
+      <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-accent-deep to-accent text-white">
+        <Icon size={18} />
+      </span>
+      <span className="mt-4 block text-base font-bold text-ink">{title}</span>
+      <span className="mt-2 block text-sm font-medium leading-6 text-slate-500">{description}</span>
+    </button>
   );
 }
 
@@ -1655,11 +1749,427 @@ function AdminAccessRequired() {
         <div>
           <h2 className="text-2xl font-bold text-ink">Admin access required</h2>
           <p className="mt-2 text-sm font-medium leading-6 text-slate-500">
-            Pricing sheets are only available to admin users. Normal users can still access the quote tools.
+            This area is only available to admin users. Normal users can still access the quote tools.
           </p>
         </div>
       </div>
     </section>
+  );
+}
+
+function UserManagementTool({ session, isAdmin }: { session: Session; isAdmin: boolean }) {
+  const [mode, setMode] = useState<UserManagementMode>("reset");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<AdminUserSearchResult[]>([]);
+  const [selectedUser, setSelectedUser] = useState<AdminUserSearchResult | null>(null);
+  const [temporaryPassword, setTemporaryPassword] = useState("");
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [newUsername, setNewUsername] = useState("");
+  const [newFullName, setNewFullName] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [status, setStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
+
+  if (!isAdmin) {
+    return <AdminAccessRequired />;
+  }
+
+  function clearUserSelection() {
+    setSearchResults([]);
+    setSelectedUser(null);
+    setTemporaryPassword("");
+    setDeleteConfirmation("");
+    setStatus(null);
+  }
+
+  function updateMode(nextMode: UserManagementMode) {
+    setMode(nextMode);
+    clearUserSelection();
+  }
+
+  async function searchUsers() {
+    const query = searchQuery.trim();
+    clearUserSelection();
+
+    if (query.length < 2) {
+      setStatus({ tone: "error", message: "Enter at least 2 characters to search." });
+      return;
+    }
+
+    setIsSearching(true);
+    const response = await fetch(`/api/admin/users?q=${encodeURIComponent(query)}`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    const payload = await response.json().catch(() => null) as { users?: AdminUserSearchResult[]; error?: string } | null;
+    setIsSearching(false);
+
+    if (!response.ok) {
+      setStatus({ tone: "error", message: payload?.error ?? "Unable to search users." });
+      return;
+    }
+
+    const users = payload?.users ?? [];
+    setSearchResults(users);
+    setStatus(users.length ? null : { tone: "error", message: "No matching users found." });
+  }
+
+  async function resetPassword() {
+    if (!selectedUser) {
+      setStatus({ tone: "error", message: "Select a user before resetting their password." });
+      return;
+    }
+
+    if (!temporaryPassword) {
+      setStatus({ tone: "error", message: "Enter a temporary password." });
+      return;
+    }
+
+    if (temporaryPassword.length < 8) {
+      setStatus({ tone: "error", message: "Temporary password must be at least 8 characters." });
+      return;
+    }
+
+    const confirmed = window.confirm(`Reset the password for ${selectedUser.username ?? selectedUser.email}?`);
+    if (!confirmed) return;
+
+    setIsSubmitting(true);
+    setStatus(null);
+    const response = await fetch("/api/admin/users", {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ userId: selectedUser.id, password: temporaryPassword }),
+    });
+    const payload = await response.json().catch(() => null) as { message?: string; error?: string } | null;
+    setIsSubmitting(false);
+
+    if (!response.ok) {
+      setStatus({ tone: "error", message: payload?.error ?? "Unable to update password." });
+      return;
+    }
+
+    setTemporaryPassword("");
+    setStatus({ tone: "success", message: payload?.message ?? "Password updated. Ask the user to log in with their temporary password." });
+  }
+
+  async function addUser() {
+    const username = newUsername.trim();
+    const fullName = newFullName.trim();
+
+    if (!username) {
+      setStatus({ tone: "error", message: "Enter a username." });
+      return;
+    }
+
+    if (!fullName) {
+      setStatus({ tone: "error", message: "Enter a full name." });
+      return;
+    }
+
+    if (!newPassword) {
+      setStatus({ tone: "error", message: "Enter a temporary password." });
+      return;
+    }
+
+    if (newPassword.length < 8) {
+      setStatus({ tone: "error", message: "Temporary password must be at least 8 characters." });
+      return;
+    }
+
+    setIsSubmitting(true);
+    setStatus(null);
+    const response = await fetch("/api/admin/users", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ username, fullName, password: newPassword }),
+    });
+    const payload = await response.json().catch(() => null) as { message?: string; error?: string } | null;
+    setIsSubmitting(false);
+
+    if (!response.ok) {
+      setStatus({ tone: "error", message: payload?.error ?? "Unable to add user." });
+      return;
+    }
+
+    setNewUsername("");
+    setNewFullName("");
+    setNewPassword("");
+    setStatus({ tone: "success", message: payload?.message ?? "User created." });
+  }
+
+  async function deleteUser() {
+    if (!selectedUser) {
+      setStatus({ tone: "error", message: "Select a user before deleting." });
+      return;
+    }
+
+    if (selectedUser.id === session.user.id) {
+      setStatus({ tone: "error", message: "You cannot delete your own currently logged-in user." });
+      return;
+    }
+
+    if (deleteConfirmation.trim() !== "DELETE") {
+      setStatus({ tone: "error", message: "Type DELETE to confirm." });
+      return;
+    }
+
+    const confirmed = window.confirm(`Permanently delete ${selectedUser.username ?? selectedUser.email}?`);
+    if (!confirmed) return;
+
+    setIsSubmitting(true);
+    setStatus(null);
+    const response = await fetch("/api/admin/users", {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ userId: selectedUser.id, confirmation: deleteConfirmation }),
+    });
+    const payload = await response.json().catch(() => null) as { message?: string; error?: string } | null;
+    setIsSubmitting(false);
+
+    if (!response.ok) {
+      setStatus({ tone: "error", message: payload?.error ?? "Unable to delete user." });
+      return;
+    }
+
+    setSelectedUser(null);
+    setDeleteConfirmation("");
+    setSearchResults((current) => current.filter((user) => user.id !== selectedUser.id));
+    setStatus({ tone: "success", message: payload?.message ?? "User deleted." });
+  }
+
+  return (
+    <section className="space-y-5">
+      <div className="panel">
+        <SectionTitle title="User Management" subtitle="Admin-only tools for Stronghold user accounts." />
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
+          <UserManagementModeButton mode="reset" activeMode={mode} onClick={updateMode} title="Reset Password" />
+          <UserManagementModeButton mode="add" activeMode={mode} onClick={updateMode} title="Add User" />
+          <UserManagementModeButton mode="delete" activeMode={mode} onClick={updateMode} title="Delete User" />
+        </div>
+      </div>
+
+      {status ? <StatusBanner message={status.message} tone={status.tone} /> : null}
+
+      {mode === "add" ? (
+        <div className="panel">
+          <SectionTitle title="Add User" subtitle="Create a standard user account with a temporary password." />
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <TextField label="Username" value={newUsername} onChange={setNewUsername} placeholder="david" />
+            <TextField label="Full name" value={newFullName} onChange={setNewFullName} placeholder="David Smith" />
+            <PasswordInput label="Temporary password" value={newPassword} onChange={setNewPassword} />
+            <DetailTile label="Auth email" value={`${newUsername.trim().toLowerCase().replace(/\s+/g, "") || "username"}@stronghold.local`} />
+          </div>
+          <div className="mt-5 flex justify-end">
+            <button type="button" onClick={addUser} className="primary-button flex items-center justify-center gap-2" disabled={isSubmitting}>
+              <Save size={17} />
+              {isSubmitting ? "Creating..." : "Add User"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="panel">
+          <SectionTitle
+            title={mode === "reset" ? "Reset Password" : "Delete User"}
+            subtitle="Search by username, full name, or linked auth email."
+          />
+          <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(260px,1fr)_auto]">
+            <label className="field flex items-center gap-3">
+              <User className="shrink-0 text-accent" size={18} />
+              <input
+                value={searchQuery}
+                onChange={(event) => {
+                  setSearchQuery(event.target.value);
+                  clearUserSelection();
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void searchUsers();
+                  }
+                }}
+                className="h-14 flex-1 bg-transparent outline-none placeholder:text-slate-300"
+                placeholder="Username, full name, or auth email"
+              />
+            </label>
+            <button type="button" onClick={searchUsers} className="secondary-button flex items-center justify-center gap-2" disabled={isSearching}>
+              <Eye size={17} />
+              {isSearching ? "Searching..." : "Search"}
+            </button>
+          </div>
+
+          <UserSearchResults users={searchResults} selectedUser={selectedUser} onSelect={(user) => {
+            setSelectedUser(user);
+            setTemporaryPassword("");
+            setDeleteConfirmation("");
+            setStatus(null);
+          }} />
+
+          {selectedUser ? (
+            <div className="mt-4 rounded-[20px] border border-line bg-mist p-4">
+              <p className="text-sm font-semibold text-ink">Selected user</p>
+              <p className="mt-1 text-sm font-medium text-slate-500">
+                {(selectedUser.username ?? "No username")} • {selectedUser.email}
+              </p>
+            </div>
+          ) : null}
+
+          {mode === "reset" && selectedUser ? (
+            <div className="mt-4">
+              <PasswordInput label="Temporary password" value={temporaryPassword} onChange={setTemporaryPassword} />
+              <div className="mt-5 flex justify-end">
+                <button type="button" onClick={resetPassword} className="primary-button flex items-center justify-center gap-2" disabled={isSubmitting || !temporaryPassword}>
+                  <Save size={17} />
+                  {isSubmitting ? "Updating..." : "Reset Password"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {mode === "delete" && selectedUser ? (
+            <div className="mt-4 space-y-4">
+              <StatusBanner message="Deleting a user permanently removes their login. Type DELETE to confirm." tone="error" />
+              <TextField label="Confirmation" value={deleteConfirmation} onChange={setDeleteConfirmation} placeholder="DELETE" />
+              <div className="flex justify-end">
+                <button type="button" onClick={deleteUser} className="primary-button flex items-center justify-center gap-2" disabled={isSubmitting || deleteConfirmation !== "DELETE"}>
+                  <Trash2 size={17} />
+                  {isSubmitting ? "Deleting..." : "Delete User"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function UserManagementModeButton({
+  mode,
+  activeMode,
+  onClick,
+  title,
+}: {
+  mode: UserManagementMode;
+  activeMode: UserManagementMode;
+  onClick: (mode: UserManagementMode) => void;
+  title: string;
+}) {
+  const selected = mode === activeMode;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(mode)}
+      className={clsx(
+        "rounded-[20px] border p-5 text-left transition",
+        selected ? "border-blue-200 bg-accent-soft" : "border-line bg-mist hover:bg-white",
+      )}
+    >
+      <span className={clsx("inline-flex h-10 w-10 items-center justify-center rounded-2xl", selected ? "bg-accent text-white" : "bg-white text-accent")}>
+        {mode === "delete" ? <Trash2 size={17} /> : mode === "add" ? <User size={17} /> : <Settings size={17} />}
+      </span>
+      <span className="mt-4 block text-sm font-bold text-ink">{title}</span>
+    </button>
+  );
+}
+
+function UserSearchResults({
+  users,
+  selectedUser,
+  onSelect,
+}: {
+  users: AdminUserSearchResult[];
+  selectedUser: AdminUserSearchResult | null;
+  onSelect: (user: AdminUserSearchResult) => void;
+}) {
+  if (!users.length) return null;
+
+  return (
+    <div className="mt-4 grid gap-3">
+      {users.map((user) => {
+        const selected = selectedUser?.id === user.id;
+        return (
+          <button
+            key={user.id}
+            type="button"
+            onClick={() => onSelect(user)}
+            className={clsx(
+              "rounded-[20px] border p-4 text-left transition",
+              selected ? "border-blue-200 bg-accent-soft" : "border-line bg-mist hover:bg-white",
+            )}
+          >
+            <span className="block text-sm font-semibold text-ink">{user.username ?? "No username"}</span>
+            <span className="mt-1 block text-sm font-medium text-slate-500">{user.email}</span>
+            <span className="mt-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+              {user.fullName ? `${user.fullName} • ${user.role}` : user.role}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-sm font-semibold text-slate-500">{label}</span>
+      <span className="field flex items-center gap-3">
+        <User className="shrink-0 text-accent" size={18} />
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-14 flex-1 bg-transparent outline-none placeholder:text-slate-300"
+          placeholder={placeholder}
+        />
+      </span>
+    </label>
+  );
+}
+
+function PasswordInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-sm font-semibold text-slate-500">{label}</span>
+      <span className="field flex items-center gap-3">
+        <Settings className="shrink-0 text-accent" size={18} />
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          type="password"
+          autoComplete="new-password"
+          className="h-14 flex-1 bg-transparent outline-none placeholder:text-slate-300"
+          placeholder="Minimum 8 characters"
+        />
+      </span>
+    </label>
   );
 }
 
@@ -1699,13 +2209,6 @@ function PriceSheetsTool({
   const [status, setStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isSavingCoilCarrierSettings, setIsSavingCoilCarrierSettings] = useState(false);
-  const [userSearchQuery, setUserSearchQuery] = useState("");
-  const [userSearchResults, setUserSearchResults] = useState<AdminUserSearchResult[]>([]);
-  const [selectedResetUser, setSelectedResetUser] = useState<AdminUserSearchResult | null>(null);
-  const [temporaryPassword, setTemporaryPassword] = useState("");
-  const [isSearchingUsers, setIsSearchingUsers] = useState(false);
-  const [isResettingPassword, setIsResettingPassword] = useState(false);
-  const [passwordResetStatus, setPasswordResetStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
 
   const selectedSheetOption = pricingSheetOptions.find((option) => option.value === selectedSheetOptionValue) ?? null;
   const loadedSheetOption = pricingSheetOptions.find((option) => option.value === loadedSheetOptionValue) ?? null;
@@ -1888,86 +2391,6 @@ function PriceSheetsTool({
     setStatus({ tone: "success", message: "Coil Carrier pricing saved." });
   }
 
-  async function searchUsersForPasswordReset() {
-    const query = userSearchQuery.trim();
-    setPasswordResetStatus(null);
-    setSelectedResetUser(null);
-    setUserSearchResults([]);
-
-    if (query.length < 2) {
-      setPasswordResetStatus({ tone: "error", message: "Enter at least 2 characters to search." });
-      return;
-    }
-
-    setIsSearchingUsers(true);
-
-    const response = await fetch(`/api/admin/password-reset?q=${encodeURIComponent(query)}`, {
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-      },
-    });
-    const payload = await response.json().catch(() => null) as { users?: AdminUserSearchResult[]; error?: string } | null;
-
-    setIsSearchingUsers(false);
-
-    if (!response.ok) {
-      setPasswordResetStatus({ tone: "error", message: payload?.error ?? "Unable to search users." });
-      return;
-    }
-
-    const users = payload?.users ?? [];
-    setUserSearchResults(users);
-    setPasswordResetStatus(users.length ? null : { tone: "error", message: "No matching users found." });
-  }
-
-  async function resetUserPassword() {
-    if (!selectedResetUser) {
-      setPasswordResetStatus({ tone: "error", message: "Select a user before resetting their password." });
-      return;
-    }
-
-    if (!temporaryPassword) {
-      setPasswordResetStatus({ tone: "error", message: "Enter a temporary password." });
-      return;
-    }
-
-    if (temporaryPassword.length < 8) {
-      setPasswordResetStatus({ tone: "error", message: "Temporary password must be at least 8 characters." });
-      return;
-    }
-
-    const confirmed = window.confirm(`Reset the password for ${selectedResetUser.username ?? selectedResetUser.email}?`);
-    if (!confirmed) {
-      return;
-    }
-
-    setIsResettingPassword(true);
-    setPasswordResetStatus(null);
-
-    const response = await fetch("/api/admin/password-reset", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ userId: selectedResetUser.id, password: temporaryPassword }),
-    });
-    const payload = await response.json().catch(() => null) as { message?: string; error?: string } | null;
-
-    setIsResettingPassword(false);
-
-    if (!response.ok) {
-      setPasswordResetStatus({ tone: "error", message: payload?.error ?? "Unable to update password." });
-      return;
-    }
-
-    setTemporaryPassword("");
-    setPasswordResetStatus({
-      tone: "success",
-      message: payload?.message ?? "Password updated. Ask the user to log in with their temporary password and change it when available.",
-    });
-  }
-
   if (!isAdmin) {
     return <AdminAccessRequired />;
   }
@@ -2025,121 +2448,6 @@ function PriceSheetsTool({
       {loadError ? <StatusBanner message={`Pricing sheets could not be loaded: ${loadError}`} tone="error" /> : null}
       {coilCarrierSettingsError ? <StatusBanner message={`Coil Carrier pricing could not be loaded: ${coilCarrierSettingsError}`} tone="error" /> : null}
       {status ? <StatusBanner message={status.message} tone={status.tone} /> : null}
-
-      <div className="panel">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <SectionTitle title="Reset User Password" subtitle="Set a temporary password for a selected user." />
-            <p className="mt-3 max-w-3xl text-sm font-medium leading-6 text-slate-500">
-              Search by username. Existing passwords are never shown.
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(260px,1fr)_auto]">
-          <label className="field flex items-center gap-3">
-            <User className="shrink-0 text-accent" size={18} />
-            <input
-              value={userSearchQuery}
-              onChange={(event) => {
-                setUserSearchQuery(event.target.value);
-                setSelectedResetUser(null);
-                setTemporaryPassword("");
-                setPasswordResetStatus(null);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void searchUsersForPasswordReset();
-                }
-              }}
-              className="h-14 flex-1 bg-transparent outline-none placeholder:text-slate-300"
-              placeholder="Username"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={searchUsersForPasswordReset}
-            className="secondary-button flex items-center justify-center gap-2"
-            disabled={isSearchingUsers}
-          >
-            <Eye size={17} />
-            {isSearchingUsers ? "Searching..." : "Search"}
-          </button>
-        </div>
-
-        {userSearchResults.length ? (
-          <div className="mt-4 grid gap-3">
-            {userSearchResults.map((user) => {
-              const selected = selectedResetUser?.id === user.id;
-              return (
-                <button
-                  key={user.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedResetUser(user);
-                    setTemporaryPassword("");
-                    setPasswordResetStatus(null);
-                  }}
-                  className={clsx(
-                    "rounded-[20px] border p-4 text-left transition",
-                    selected ? "border-blue-200 bg-accent-soft" : "border-line bg-mist hover:bg-white",
-                  )}
-                >
-                  <span className="block text-sm font-semibold text-ink">{user.username ?? "No username"}</span>
-                  <span className="mt-1 block text-sm font-medium text-slate-500">{user.email}</span>
-                  <span className="mt-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
-                    {user.fullName ? `${user.fullName} • ${user.role}` : user.role}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        ) : null}
-
-        {selectedResetUser ? (
-          <div className="mt-4 rounded-[20px] border border-line bg-mist p-4">
-            <p className="text-sm font-semibold text-ink">Selected user</p>
-            <p className="mt-1 text-sm font-medium text-slate-500">
-              {(selectedResetUser.username ?? "No username")} • {selectedResetUser.email}
-            </p>
-          </div>
-        ) : null}
-
-        {selectedResetUser ? (
-          <label className="mt-4 block">
-            <span className="mb-2 block text-sm font-semibold text-slate-500">Temporary password</span>
-            <span className="field flex items-center gap-3">
-              <Settings className="shrink-0 text-accent" size={18} />
-              <input
-                value={temporaryPassword}
-                onChange={(event) => {
-                  setTemporaryPassword(event.target.value);
-                  setPasswordResetStatus(null);
-                }}
-                type="password"
-                autoComplete="new-password"
-                className="h-14 flex-1 bg-transparent outline-none placeholder:text-slate-300"
-                placeholder="Minimum 8 characters"
-              />
-            </span>
-          </label>
-        ) : null}
-
-        {passwordResetStatus ? <div className="mt-4"><StatusBanner message={passwordResetStatus.message} tone={passwordResetStatus.tone} /></div> : null}
-
-        <div className="mt-5 flex justify-end">
-          <button
-            type="button"
-            onClick={resetUserPassword}
-            className="primary-button flex items-center justify-center gap-2"
-            disabled={!selectedResetUser || !temporaryPassword || isResettingPassword}
-          >
-            <Save size={17} />
-            {isResettingPassword ? "Updating..." : "Reset user password"}
-          </button>
-        </div>
-      </div>
 
       {loadedSheetOption ? (
         <div className="panel">
