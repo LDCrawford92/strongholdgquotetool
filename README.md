@@ -2,7 +2,7 @@
 
 Production-ready Next.js port of the SwiftUI Stronghold quote generator.
 
-## Commands
+## Commands 
 
 ```bash
 npm install
